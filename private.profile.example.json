@@ -1,0 +1,42 @@
+{
+  "applicant": {
+    "fullName": "",
+    "email": "",
+    "phone": "",
+    "nationality": "",
+    "currentLocation": "",
+    "degree": {
+      "title": "",
+      "institution": "",
+      "country": "",
+      "graduationYear": null,
+      "classification": "",
+      "gpa": null,
+      "gpaScale": null,
+      "gradingScaleDocument": ""
+    },
+    "target": {
+      "degreeLevel": "masters",
+      "intake": "",
+      "fields": [],
+      "researchInterests": [],
+      "countries": [],
+      "fundingTypes": ["scholarship", "low-tuition"],
+      "timezone": "Africa/Lagos"
+    },
+    "englishEvidence": {
+      "testStatus": "unknown",
+      "testName": "",
+      "score": "",
+      "testDate": "",
+      "mediumOfInstructionLetter": ""
+    },
+    "documents": {
+      "academicCvPath": "",
+      "transcriptPath": "",
+      "portfolioUrl": "",
+      "githubUrl": "",
+      "projectUrls": []
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "gradreach-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-assisted international MSc supervisor, funding, and professor outreach agent",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "test:watch": "node --experimental-strip-types --test --watch",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}
