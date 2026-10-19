@@ -19,11 +19,22 @@ export interface ProfessorCandidate {
   fundingSourceUrl?: string;
   eligibilitySourceUrl?: string;
   sourceCheckedAt?: string;
+  discoveryEvidence?: DiscoveryEvidence[];
   fitSummary?: string;
   personalizedDraft?: string;
   status: CandidateStatus;
   approvedForSending: boolean;
   priority: number;
+}
+
+/** A search-result excerpt is a lead for review, never verified applicant-facing evidence. */
+export interface DiscoveryEvidence {
+  sourceUrl: string;
+  excerpt: string;
+  retrievedAt: string;
+  verification: 'unverified';
+  region: string;
+  query: string;
 }
 
 export interface OutreachAttempt {
