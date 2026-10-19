@@ -34,6 +34,32 @@ test('selects at most five approved, evidence-complete, unique recipients', () =
   assert.ok(result.skipped.every((entry) => entry.reason === 'daily limit reached'));
 });
 
+test('never allows a configured daily limit above five', () => {
+  assert.throws(() => selectDailyOutreachBatch({
+    candidates: [],
+    attempts: [],
+    now: '2026-10-19T09:00:00+01:00',
+    timeZone: 'Africa/Lagos',
+    dailyLimit: 6,
+  }), /dailyLimit must be an integer from 1 to 5/);
+});
+
+test('cancelled attempts do not consume daily capacity or block a candidate', () => {
+  const result = selectDailyOutreachBatch({
+    candidates: [candidate({ id: 'p-1' })],
+    attempts: [{
+      candidateId: 'p-1',
+      recipientEmail: 'p-1@university.example.edu',
+      scheduledFor: '2026-10-19T08:00:00+01:00',
+      state: 'cancelled',
+    }],
+    now: '2026-10-19T09:00:00+01:00',
+    timeZone: 'Africa/Lagos',
+  });
+  assert.equal(result.remainingCapacity, 5);
+  assert.deepEqual(result.selected.map((entry) => entry.id), ['p-1']);
+});
+
 test('reduces capacity for attempts already scheduled or sent today', () => {
   const result = selectDailyOutreachBatch({
     candidates: Array.from({ length: 5 }, (_, index) => candidate({ id: `p-${index + 1}` })),

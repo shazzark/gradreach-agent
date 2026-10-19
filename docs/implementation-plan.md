@@ -2,7 +2,7 @@
 
 ## Product target
 
-GradReach is a configurable research and outreach agent for a master's search. It should build and maintain a verified pool of 200 professors/programs across the configured countries and regions, covering scholarships and low-tuition programs, then prepare and send up to five tailored professor emails per day. Applicant credentials and document references load from a private profile. A transcript can be added later without rebuilding the profile.
+GradReach is a configurable research and outreach agent for the 2027 international MSc application cycle. It should build and maintain a verified pool of 200 professors/programs across the configured countries and regions, covering scholarships and low-tuition programs, then prepare and send up to five tailored professor emails per day. Applicant credentials and document references load from a private profile. A transcript can be added later without rebuilding the profile.
 
 The academic interests and country list are editable configuration. Search and program verification must not silently narrow this scope.
 
@@ -11,7 +11,7 @@ The academic interests and country list are editable configuration. Search and p
 | Phase | Goal and scope | Acceptance / verification | State |
 |---|---|---|---|
 | 0 | Initialize repository, instructions, metadata, and profile-safe project plan. | Dedicated Git root; secrets and applicant files ignored; project goal and full scope recorded. | COMPLETE |
-| 1 | Core candidate schema, source evidence fields, duplicate protection, and five-per-day queue rules. | Tests prove evidence gating, deduplication, local-day accounting, and hard cap of five. | IN PROGRESS |
+| 1 | Core candidate schema, source evidence fields, duplicate protection, and five-per-day queue rules. | Tests prove evidence gating, deduplication, local-day accounting, cancellation handling, and hard cap of five. | COMPLETE |
 | 2 | Applicant profile and MongoDB persistence, including CV/portfolio references and later transcript import. | CRUD persists profile/candidates; private fields are isolated; schema migrations/indexes verified. | NOT STARTED |
 | 3 | Research discovery across all configured regions using a search provider and official university pages. | Candidate records contain official profile/program/contact URLs, retrieval time, and source excerpts; no unsupported fields are treated as facts. | NOT STARTED |
 | 4 | Program eligibility and finance assessment: 2:2/GPA, transcript documents, English evidence, tuition, scholarship and deadlines. | Every assessment has official evidence, uncertainty, source date, and a clear eligible/unclear/ineligible outcome. | NOT STARTED |

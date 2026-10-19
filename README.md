@@ -1,6 +1,6 @@
 # GradReach Agent
 
-AI-assisted research and outreach for international MSc applications. GradReach finds potential supervisors and programs, records evidence from official sources, checks funding and entry requirements against an applicant profile, prepares personalized professor emails, and manages a five-contact-per-day outreach schedule.
+AI-assisted research and outreach for the 2027 international MSc application cycle. GradReach finds potential supervisors and programs, records evidence from official sources, checks funding and entry requirements against an applicant profile, prepares personalized professor emails, and manages a five-contact-per-day outreach schedule.
 
 ## Project status
 
