@@ -60,8 +60,10 @@ test('does not reuse a professor or email address already attempted', () => {
 });
 
 test('does not queue candidates with missing contact or fit evidence', () => {
+  const withoutEmailSource = candidate({ id: 'no-evidence' });
+  delete withoutEmailSource.emailSourceUrl;
   const result = selectDailyOutreachBatch({
-    candidates: [candidate({ id: 'no-evidence', emailSourceUrl: undefined })],
+    candidates: [withoutEmailSource],
     attempts: [],
     now: '2026-10-19T09:00:00+01:00',
     timeZone: 'Africa/Lagos',
@@ -71,8 +73,11 @@ test('does not queue candidates with missing contact or fit evidence', () => {
 });
 
 test('allows an outreach question when funding eligibility is still unknown', () => {
+  const unknownFunding = candidate({ id: 'unknown-funding' });
+  delete unknownFunding.fundingSourceUrl;
+  delete unknownFunding.eligibilitySourceUrl;
   const result = selectDailyOutreachBatch({
-    candidates: [candidate({ id: 'unknown-funding', fundingSourceUrl: undefined, eligibilitySourceUrl: undefined })],
+    candidates: [unknownFunding],
     attempts: [],
     now: '2026-10-19T09:00:00+01:00',
     timeZone: 'Africa/Lagos',
