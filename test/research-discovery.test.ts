@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
-import { discoverProfessorCandidates } from '../src/application/research-discovery.ts';
+import { discoverProfessorCandidates, fetchOfficialPage, markCandidateEvidenceReviewed } from '../src/application/research-discovery.ts';
 import { BraveSearchProvider } from '../src/infrastructure/brave-search-provider.ts';
 
 const profile = parseApplicantProfile({
@@ -35,6 +35,7 @@ test('discovery searches every configured region and persists official-host resu
     options: {
       officialHostsByRegion: { 'Country A': ['www.countrya.edu'], 'Country B': ['www.countryb.ac.uk'] },
       countryCodesByRegion: { 'Country A': 'AA', 'Country B': 'BB' },
+      fetchPage: async (url) => ({ url, html: '<p>Synthetic official page</p>' }),
       now: () => new Date('2026-10-19T12:00:00.000Z'),
     },
   });
@@ -47,7 +48,7 @@ test('discovery searches every configured region and persists official-host resu
   assert.ok(queried.some((query) => query.includes('Country B')));
   assert.deepEqual(saved.map((candidate) => candidate.country), ['Country A', 'Country B']);
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
-  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === undefined));
+  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.verification === 'unverified'));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.sourceUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.retrievedAt === '2026-10-19T12:00:00.000Z'));
@@ -97,4 +98,47 @@ test('Brave adapter authenticates, requests a bounded result count, and filters 
 test('Brave adapter fails clearly when credentials are missing without exposing credentials', async () => {
   const provider = new BraveSearchProvider(undefined);
   await assert.rejects(provider.search('synthetic query'), /SEARCH_PROVIDER_API_KEY must be configured/);
+});
+
+test('official page fetch validates exact HTTPS hosts and refuses redirects', async () => {
+  let fetches = 0;
+  const fetchImpl: typeof fetch = async () => { fetches += 1; return new Response('', { status: 302, headers: { Location: 'https://other.example.edu/page' } }); };
+  await assert.rejects(fetchOfficialPage('https://sub.university.example.edu/person', ['university.example.edu'], fetchImpl), /outside the reviewed/);
+  await assert.rejects(fetchOfficialPage('https://university.example.edu/person', ['university.example.edu'], fetchImpl), /redirects are not followed/);
+  assert.equal(fetches, 1);
+});
+
+test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {
+  const saved: ProfessorCandidate[] = [];
+  const pages = new Map([
+    ['https://university.example.edu/person', '<a href="/programs/msc">MSc programme</a><a href="/people/contact">Contact</a>'],
+    ['https://university.example.edu/programs/msc', '<h1>Research MSc</h1>'],
+    ['https://university.example.edu/people/contact', '<h1>Contact details</h1>'],
+  ]);
+  const result = await discoverProfessorCandidates({
+    profile,
+    provider: { async search() { return [
+      { title: 'Professor search result', url: 'https://university.example.edu/person?utm_source=search#bio', excerpt: 'Search excerpt.' },
+      { title: 'Duplicate URL variant', url: 'https://university.example.edu/person#other', excerpt: 'Duplicate excerpt.' },
+    ]; } },
+    repository: { async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'], 'Country B': ['university.example.edu'] },
+      fetchPage: async (url) => ({ url, html: pages.get(url) ?? '' }),
+      now: () => new Date('2026-10-19T12:00:00.000Z'),
+    },
+  });
+  assert.equal(result.saved, 1);
+  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === 'https://university.example.edu/person'));
+  assert.ok(saved.every((candidate) => candidate.programUrl === 'https://university.example.edu/programs/msc'));
+  assert.ok(saved.every((candidate) => candidate.officialContactUrl === 'https://university.example.edu/people/contact'));
+  assert.ok(saved.every((candidate) => candidate.officialEmail === undefined));
+  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.map((item) => item.kind).join(',') === 'search-result,professor-profile,program,contact'));
+  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.every((item) => item.verification === 'unverified')));
+  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.every((item) => item.retrievedAt === '2026-10-19T12:00:00.000Z')));
+  assert.throws(() => markCandidateEvidenceReviewed(saved[0]!, []), /explicitly reviewed/);
+  const candidate = markCandidateEvidenceReviewed(saved[0]!, saved[0]!.discoveryEvidence!.map((item) => item.sourceUrl));
+  assert.equal(candidate.status, 'ready-for-review');
+  assert.ok(candidate.discoveryEvidence?.every((item) => item.verification === 'reviewed'));
+  assert.equal(candidate.approvedForSending, false);
 });

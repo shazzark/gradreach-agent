@@ -21,6 +21,7 @@ export interface DiscoveryOptions {
   countryCodesByRegion?: Record<string, string>;
   resultsPerQuery?: number;
   now?: () => Date;
+  fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
 }
 
 function normalizeHost(value: string): string {
@@ -62,6 +63,7 @@ function queryFor(region: string, interest: string, host: string): string {
 function candidateFor(result: SearchResult, sourceUrl: string, region: string, query: string, retrievedAt: string): ProfessorCandidate {
   const id = `discovery-${createHash('sha256').update(sourceUrl).digest('hex').slice(0, 24)}`;
   const evidence: DiscoveryEvidence = {
+    kind: 'search-result',
     sourceUrl,
     excerpt: result.excerpt.slice(0, 1200),
     retrievedAt,
@@ -81,6 +83,85 @@ function candidateFor(result: SearchResult, sourceUrl: string, region: string, q
     approvedForSending: false,
     priority: 0,
   };
+}
+
+function linksFromHtml(html: string, baseUrl: string, hosts: string[]): Array<{ url: string; text: string }> {
+  const links: Array<{ url: string; text: string }> = [];
+  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/gi)) {
+    const href = match[2];
+    if (!href) continue;
+    try {
+      const url = canonicalizeSourceUrl(new URL(href, baseUrl).toString());
+      if (isAllowedOfficialUrl(url, hosts)) {
+        links.push({ url, text: (match[3] ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() });
+      }
+    } catch { /* Ignore malformed links. */ }
+  }
+  return links;
+}
+
+function linkKind(link: { url: string; text: string }): 'program' | 'contact' | undefined {
+  const signal = `${link.text} ${new URL(link.url).pathname}`.toLowerCase();
+  if (/\b(contact|contact-us|contact details|email|reach me)\b/.test(signal)) return 'contact';
+  if (/\b(program|programme|course|degree|study|graduate|master|msc)\b/.test(signal)) return 'program';
+  return undefined;
+}
+
+/** Fetches one official page with redirect and final-host checks; never returns page instructions as trusted data. */
+export async function fetchOfficialPage(url: string, allowedHosts: string[], fetchImpl: typeof fetch = fetch): Promise<{ url: string; html: string }> {
+  const hosts = [...new Set(allowedHosts.map(normalizeHost))];
+  if (!isAllowedOfficialUrl(url, hosts)) throw new Error('Official page URL is outside the reviewed HTTPS host allowlist');
+  const response = await fetchImpl(url, { redirect: 'manual', headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(15_000) });
+  if (response.status >= 300 && response.status < 400) throw new Error('Official page redirects are not followed during discovery');
+  if (!response.ok) throw new Error(`Official page request failed with HTTP ${response.status}`);
+  const finalUrl = response.url || url;
+  if (!isAllowedOfficialUrl(finalUrl, hosts)) throw new Error('Official page response resolved outside the reviewed HTTPS host allowlist');
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType && !contentType.toLowerCase().includes('text/html')) throw new Error('Official page response is not HTML');
+  const html = await response.text();
+  return { url: canonicalizeSourceUrl(finalUrl), html: html.slice(0, 2_000_000) };
+}
+
+/** Fetches the search result and its first same-host program/contact links, storing all evidence unverified. */
+export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now'>): Promise<ProfessorCandidate> {
+  const fetchPage = options.fetchPage ?? ((url: string) => fetchOfficialPage(url, hosts));
+  const evidence = [...(candidate.discoveryEvidence ?? [])];
+  const retrievedAt = () => (options.now?.() ?? new Date()).toISOString();
+  const profileUrl = evidence.find((item) => item.kind === 'search-result')?.sourceUrl;
+  if (!profileUrl) return candidate;
+  const page = await fetchPage(profileUrl);
+  const profileRetrievedAt = retrievedAt();
+  evidence.push({ kind: 'professor-profile', sourceUrl: page.url, excerpt: page.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL' });
+  const chosen = new Map<'program' | 'contact', string>();
+  for (const link of linksFromHtml(page.html, page.url, hosts)) {
+    const kind = linkKind(link);
+    if (kind && !chosen.has(kind)) chosen.set(kind, link.url);
+  }
+  for (const kind of ['program', 'contact'] as const) {
+    const url = chosen.get(kind);
+    if (!url) continue;
+    const linkedPage = await fetchPage(url);
+    const sourceUrl = linkedPage.url;
+    evidence.push({ kind, sourceUrl, excerpt: linkedPage.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
+    if (kind === 'program') candidate.programUrl = sourceUrl;
+    else candidate.officialContactUrl = sourceUrl;
+  }
+  candidate.officialProfileUrl = page.url;
+  candidate.sourceCheckedAt = profileRetrievedAt;
+  candidate.discoveryEvidence = evidence;
+  return candidate;
+}
+
+/** Records a human review of the fetched official evidence; this does not approve outreach or assert eligibility. */
+export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, reviewedSourceUrls: string[]): ProfessorCandidate {
+  const reviewed = new Set(reviewedSourceUrls.map(canonicalizeSourceUrl));
+  const evidence = candidate.discoveryEvidence ?? [];
+  if (evidence.length === 0 || evidence.some((item) => item.verification !== 'reviewed' && !reviewed.has(canonicalizeSourceUrl(item.sourceUrl)))) {
+    throw new Error('Every discovery evidence source must be explicitly reviewed');
+  }
+  candidate.discoveryEvidence = evidence.map((item) => ({ ...item, verification: 'reviewed' }));
+  if (candidate.status === 'needs-evidence') candidate.status = 'ready-for-review';
+  return candidate;
 }
 
 /** Searches every configured country and reviewed institution host, persisting only review-gated leads. */
@@ -121,7 +202,9 @@ export async function discoverProfessorCandidates(input: {
           const canonicalUrl = canonicalizeSourceUrl(result.url);
           if (seenUrls.has(canonicalUrl)) continue;
           seenUrls.add(canonicalUrl);
-          await input.repository.save(candidateFor(result, canonicalUrl, region, query, retrievedAt));
+          const candidate = candidateFor(result, canonicalUrl, region, query, retrievedAt);
+          await enrichOfficialCandidate(candidate, hosts, input.options);
+          await input.repository.save(candidate);
           saved += 1;
         }
       }

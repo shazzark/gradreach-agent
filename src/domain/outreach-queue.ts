@@ -13,6 +13,7 @@ export interface ProfessorCandidate {
   institution: string;
   country: string;
   officialProfileUrl?: string;
+  officialContactUrl?: string;
   officialEmail?: string;
   emailSourceUrl?: string;
   programUrl?: string;
@@ -29,10 +30,11 @@ export interface ProfessorCandidate {
 
 /** A search-result excerpt is a lead for review, never verified applicant-facing evidence. */
 export interface DiscoveryEvidence {
+  kind: 'search-result' | 'professor-profile' | 'program' | 'contact';
   sourceUrl: string;
   excerpt: string;
   retrievedAt: string;
-  verification: 'unverified';
+  verification: 'unverified' | 'reviewed';
   region: string;
   query: string;
 }
