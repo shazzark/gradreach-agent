@@ -4,7 +4,7 @@ AI-assisted research and outreach for the 2027 international MSc application cyc
 
 ## Project status
 
-The repository is initialized. The first verified phase implements the core contact and daily-queue rules. Web research, program eligibility analysis, MongoDB persistence, email-provider integration, and the user interface are planned phases and are not implemented yet.
+The core contact and daily-queue rules are verified. Phase 2 adds local applicant-profile validation and MongoDB repositories for the private profile, candidates, and outreach attempts; the MongoDB service is not configured here, so live persistence and index behavior have not been verified. Web research, program eligibility analysis, email-provider integration, and the user interface remain unimplemented. No email is sent by this phase.
 
 ## Requirements
 
@@ -15,6 +15,12 @@ The repository is initialized. The first verified phase implements the core cont
 ```bash
 npm test
 ```
+
+Set `MONGODB_TEST_URI` to an isolated MongoDB test deployment and run `npm run test:mongodb` to verify profile, candidate, and attempt CRUD and index behavior against MongoDB. The integration test creates and drops a uniquely named test database. Set `MONGODB_URI` (and optionally `MONGODB_DATABASE`) and run `npm run db:indexes` to create the Phase 2 indexes as an explicit setup step.
+
+MongoDB and profile settings are read from the process environment; this project does not load `.env` automatically.
+
+Set `GRADREACH_PROFILE_PATH` to a private local JSON profile when loading applicant details. The default is the ignored `private.profile.json`; `private.profile.example.json` contains only blank example values.
 
 ## Repository metadata
 

@@ -9,12 +9,17 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test",
+    "test:mongodb": "node --experimental-strip-types --test test/mongo-storage.integration.test.ts",
     "test:watch": "node --experimental-strip-types --test --watch",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck"
+    "build": "npm run typecheck",
+    "db:indexes": "node --experimental-strip-types src/infrastructure/create-phase2-indexes.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "mongodb": "^7.7.0"
   }
 }

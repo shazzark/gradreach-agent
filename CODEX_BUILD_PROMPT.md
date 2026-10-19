@@ -21,11 +21,11 @@ Read the applicant's academic direction, countries, credentials, CV and portfoli
 
 ## Current code
 
-Phase 0 is complete. Phase 1 is in progress. `src/domain/outreach-queue.ts` selects only approved candidates with evidence fields, deduplicates recipients, uses the configured timezone for date accounting, and caps a batch at five. Its tests use Node's built-in test runner. Preserve these contracts and add meaningful tests for any new behavior.
+Phases 0 and 1 are complete. Phase 1's `src/domain/outreach-queue.ts` selects only approved candidates with evidence fields, deduplicates recipients, uses the configured timezone for date accounting, and caps a batch at five. Its tests use Node's built-in test runner. Preserve these contracts and add meaningful tests for any new behavior.
 
 ## Immediate next task
 
-Complete Phase 1 with a review of the queue code and tests, then implement Phase 2: validate a private applicant profile schema and MongoDB persistence for candidates and outreach attempts. Design the profile import so the current academic/job CV can be loaded privately now and the transcript added later. Do not invent or bundle personal file data into fixtures. If MongoDB credentials are absent, implement repository interfaces and unit tests, clearly report database integration as blocked, and continue only with in-scope work that does not depend on the service.
+Phase 1 is complete. Implement Phase 2: validate a private applicant profile schema and MongoDB persistence for profiles, candidates, and outreach attempts. Design profile import so CV references can be loaded privately and transcript references can be added later. Do not invent or bundle personal file data into fixtures. If MongoDB test configuration is absent, implement repository code and profile validation tests, clearly report database integration as unverified, and continue only with in-scope work that does not depend on the service.
 
 ## Verification and reporting
 

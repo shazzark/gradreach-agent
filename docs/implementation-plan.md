@@ -12,7 +12,7 @@ The academic interests and country list are editable configuration. Search and p
 |---|---|---|---|
 | 0 | Initialize repository, instructions, metadata, and profile-safe project plan. | Dedicated Git root; secrets and applicant files ignored; project goal and full scope recorded. | COMPLETE |
 | 1 | Core candidate schema, source evidence fields, duplicate protection, and five-per-day queue rules. | Tests prove evidence gating, deduplication, local-day accounting, cancellation handling, and hard cap of five. | COMPLETE |
-| 2 | Applicant profile and MongoDB persistence, including CV/portfolio references and later transcript import. | CRUD persists profile/candidates; private fields are isolated; schema migrations/indexes verified. | NOT STARTED |
+| 2 | Applicant profile plus MongoDB persistence for the private profile, professor candidates, and outreach attempts, including CV/portfolio references and later transcript import. | CRUD persists the profile/candidates/attempts; private profile data stays in its own collection; candidate and attempt indexes and retry-safe attempt writes are verified against an isolated MongoDB test deployment. | IN PROGRESS |
 | 3 | Research discovery across all configured regions using a search provider and official university pages. | Candidate records contain official profile/program/contact URLs, retrieval time, and source excerpts; no unsupported fields are treated as facts. | NOT STARTED |
 | 4 | Program eligibility and finance assessment: 2:2/GPA, transcript documents, English evidence, tuition, scholarship and deadlines. | Every assessment has official evidence, uncertainty, source date, and a clear eligible/unclear/ineligible outcome. | NOT STARTED |
 | 5 | Research-fit analysis and personalized email generation based on the applicant profile, verified professor research, and project evidence. | Drafts cite the research fact they refer to; unsupported claims are rejected; duplicate and template-only emails fail review. | NOT STARTED |
@@ -21,7 +21,7 @@ The academic interests and country list are editable configuration. Search and p
 
 ## Current phase boundaries
 
-Phase 1 implements pure queue-selection rules only. It does not yet search the web, connect to MongoDB or an email account, create a CV, or send messages. External actions will be implemented behind explicit account connection and send controls. The long-term authorized workflow is five real emails per day, not merely five drafts.
+Phase 1 implements pure queue-selection rules. Phase 2 now validates the private local profile at runtime and provides separate MongoDB repositories for profiles, professor candidates, and outreach attempts, plus the explicit `npm run db:indexes` setup command. Attempt writes are idempotent by candidate and scheduled instant. A MongoDB test deployment has not been configured, so persistence and index behavior remain unverified. This phase does not search the web, connect to an email account, create a CV, or send messages. The long-term authorized workflow is five real emails per day, not merely five drafts.
 
 ## Main data groups
 
