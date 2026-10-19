@@ -4,7 +4,7 @@ AI-assisted research and outreach for the 2027 international MSc application cyc
 
 ## Project status
 
-The core contact and daily-queue rules are verified. Phase 2 adds local applicant-profile validation and MongoDB repositories for the private profile, candidates, and outreach attempts; the MongoDB service is not configured here, so live persistence and index behavior have not been verified. Web research, program eligibility analysis, email-provider integration, and the user interface remain unimplemented. No email is sent by this phase.
+The core contact and daily-queue rules are verified. Phase 2 profile validation and MongoDB repositories for the private profile, candidates, and outreach attempts passed integration tests against a local MongoDB test database. No remote or production database is configured. Web research, program eligibility analysis, email-provider integration, and the user interface remain unimplemented. No email is sent by this phase.
 
 ## Requirements
 

@@ -25,7 +25,7 @@ Phases 0 and 1 are complete. Phase 1's `src/domain/outreach-queue.ts` selects on
 
 ## Immediate next task
 
-Phase 1 is complete. Implement Phase 2: validate a private applicant profile schema and MongoDB persistence for profiles, candidates, and outreach attempts. Design profile import so CV references can be loaded privately and transcript references can be added later. Do not invent or bundle personal file data into fixtures. If MongoDB test configuration is absent, implement repository code and profile validation tests, clearly report database integration as unverified, and continue only with in-scope work that does not depend on the service.
+Phases 1 and 2 are complete. The private applicant profile is validated at runtime, and MongoDB repositories persist profiles, candidates, and outreach attempts in separate collections. Attempt writes are idempotent by candidate and scheduled instant. Profile fixtures contain only blank example values; test candidates use synthetic values. MongoDB integration tests run against an isolated test database and verify CRUD, uniqueness, attempt persistence, and indexes. Continue with Phase 3: research discovery across all configured regions using a search provider and official university sources. Do not implement email sending in earlier phases; email-provider work remains Phase 6 and requires explicit account connection and send controls.
 
 ## Verification and reporting
 
