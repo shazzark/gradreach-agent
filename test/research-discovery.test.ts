@@ -48,7 +48,7 @@ test('discovery searches every configured region and persists official-host resu
   assert.ok(queried.some((query) => query.includes('Country B')));
   assert.deepEqual(saved.map((candidate) => candidate.country), ['Country A', 'Country B']);
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
-  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
+  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === undefined));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.verification === 'unverified'));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.sourceUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.retrievedAt === '2026-10-19T12:00:00.000Z'));
@@ -129,16 +129,20 @@ test('official URL normalization, deduplication and fetched evidence stay unveri
     },
   });
   assert.equal(result.saved, 1);
-  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === 'https://university.example.edu/person'));
+  assert.ok(saved.every((candidate) => candidate.officialProfileUrl === undefined));
   assert.ok(saved.every((candidate) => candidate.programUrl === 'https://university.example.edu/programs/msc'));
   assert.ok(saved.every((candidate) => candidate.officialContactUrl === 'https://university.example.edu/people/contact'));
   assert.ok(saved.every((candidate) => candidate.officialEmail === undefined));
-  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.map((item) => item.kind).join(',') === 'search-result,professor-profile,program,contact'));
+  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.map((item) => item.kind).join(',') === 'search-result,official-page,program,contact'));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.every((item) => item.verification === 'unverified')));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.every((item) => item.retrievedAt === '2026-10-19T12:00:00.000Z')));
-  assert.throws(() => markCandidateEvidenceReviewed(saved[0]!, []), /explicitly reviewed/);
-  const candidate = markCandidateEvidenceReviewed(saved[0]!, saved[0]!.discoveryEvidence!.map((item) => item.sourceUrl));
+  assert.throws(() => markCandidateEvidenceReviewed(saved[0]!, [], 'https://university.example.edu/person'), /explicitly reviewed/);
+  const reviewedUrls = saved[0]!.discoveryEvidence!.map((item) => item.sourceUrl);
+  assert.throws(() => markCandidateEvidenceReviewed(saved[0]!, reviewedUrls, 'https://university.example.edu/not-a-fetched-page'), /selected from a reviewed official page/);
+  const candidate = markCandidateEvidenceReviewed(saved[0]!, reviewedUrls, 'https://university.example.edu/person');
+  assert.equal(candidate.officialProfileUrl, 'https://university.example.edu/person');
   assert.equal(candidate.status, 'ready-for-review');
   assert.ok(candidate.discoveryEvidence?.every((item) => item.verification === 'reviewed'));
+  assert.ok(candidate.discoveryEvidence?.some((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl));
   assert.equal(candidate.approvedForSending, false);
 });

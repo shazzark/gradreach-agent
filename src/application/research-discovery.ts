@@ -127,11 +127,11 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
   const fetchPage = options.fetchPage ?? ((url: string) => fetchOfficialPage(url, hosts));
   const evidence = [...(candidate.discoveryEvidence ?? [])];
   const retrievedAt = () => (options.now?.() ?? new Date()).toISOString();
-  const profileUrl = evidence.find((item) => item.kind === 'search-result')?.sourceUrl;
-  if (!profileUrl) return candidate;
-  const page = await fetchPage(profileUrl);
+  const resultUrl = evidence.find((item) => item.kind === 'search-result')?.sourceUrl;
+  if (!resultUrl) return candidate;
+  const page = await fetchPage(resultUrl);
   const profileRetrievedAt = retrievedAt();
-  evidence.push({ kind: 'professor-profile', sourceUrl: page.url, excerpt: page.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL' });
+  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: page.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
   const chosen = new Map<'program' | 'contact', string>();
   for (const link of linksFromHtml(page.html, page.url, hosts)) {
     const kind = linkKind(link);
@@ -146,20 +146,28 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
     if (kind === 'program') candidate.programUrl = sourceUrl;
     else candidate.officialContactUrl = sourceUrl;
   }
-  candidate.officialProfileUrl = page.url;
   candidate.sourceCheckedAt = profileRetrievedAt;
   candidate.discoveryEvidence = evidence;
   return candidate;
 }
 
 /** Records a human review of the fetched official evidence; this does not approve outreach or assert eligibility. */
-export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, reviewedSourceUrls: string[]): ProfessorCandidate {
+export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, reviewedSourceUrls: string[], reviewedProfessorProfileUrl: string): ProfessorCandidate {
   const reviewed = new Set(reviewedSourceUrls.map(canonicalizeSourceUrl));
   const evidence = candidate.discoveryEvidence ?? [];
+  const profileUrl = canonicalizeSourceUrl(reviewedProfessorProfileUrl);
   if (evidence.length === 0 || evidence.some((item) => item.verification !== 'reviewed' && !reviewed.has(canonicalizeSourceUrl(item.sourceUrl)))) {
     throw new Error('Every discovery evidence source must be explicitly reviewed');
   }
-  candidate.discoveryEvidence = evidence.map((item) => ({ ...item, verification: 'reviewed' }));
+  if (!reviewed.has(profileUrl) || !evidence.some((item) => item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl)) {
+    throw new Error('The professor profile must be explicitly selected from a reviewed official page');
+  }
+  candidate.discoveryEvidence = evidence.map((item) => ({
+    ...item,
+    verification: 'reviewed',
+    ...(item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl ? { kind: 'professor-profile' as const } : {}),
+  }));
+  candidate.officialProfileUrl = profileUrl;
   if (candidate.status === 'needs-evidence') candidate.status = 'ready-for-review';
   return candidate;
 }
