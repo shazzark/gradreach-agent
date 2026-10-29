@@ -56,6 +56,23 @@ function canonicalizeSourceUrl(value: string): string {
   return url.toString();
 }
 
+function extractPageExcerpt(html: string): string {
+  return html
+    .replace(/<!--([\s\S]*?)-->/g, ' ')
+    .replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1200);
+}
+
 function queryFor(region: string, interest: string, host: string): string {
   return `site:${host} professor ${interest} MSc ${region}`.slice(0, 600);
 }
@@ -87,13 +104,14 @@ function candidateFor(result: SearchResult, sourceUrl: string, region: string, q
 
 function linksFromHtml(html: string, baseUrl: string, hosts: string[]): Array<{ url: string; text: string }> {
   const links: Array<{ url: string; text: string }> = [];
-  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/gi)) {
+  const visibleHtml = html.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ');
+  for (const match of visibleHtml.matchAll(/<a\b[^>]*href\s*=\s*(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a\s*>/gi)) {
     const href = match[2];
     if (!href) continue;
     try {
       const url = canonicalizeSourceUrl(new URL(href, baseUrl).toString());
       if (isAllowedOfficialUrl(url, hosts)) {
-        links.push({ url, text: (match[3] ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() });
+        links.push({ url, text: extractPageExcerpt(match[3] ?? '') });
       }
     } catch { /* Ignore malformed links. */ }
   }
@@ -131,7 +149,7 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
   if (!resultUrl) return candidate;
   const page = await fetchPage(resultUrl);
   const profileRetrievedAt = retrievedAt();
-  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: page.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
+  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: extractPageExcerpt(page.html), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
   const chosen = new Map<'program' | 'contact', string>();
   for (const link of linksFromHtml(page.html, page.url, hosts)) {
     const kind = linkKind(link);
@@ -142,7 +160,7 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
     if (!url) continue;
     const linkedPage = await fetchPage(url);
     const sourceUrl = linkedPage.url;
-    evidence.push({ kind, sourceUrl, excerpt: linkedPage.html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
+    evidence.push({ kind, sourceUrl, excerpt: extractPageExcerpt(linkedPage.html), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
     if (kind === 'program') candidate.programUrl = sourceUrl;
     else candidate.officialContactUrl = sourceUrl;
   }
@@ -152,7 +170,7 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
 }
 
 /** Records a human review of the fetched official evidence; this does not approve outreach or assert eligibility. */
-export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, reviewedSourceUrls: string[], reviewedProfessorProfileUrl: string): ProfessorCandidate {
+export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, reviewedSourceUrls: string[], reviewedProfessorProfileUrl: string, reviewedProfessorName: string): ProfessorCandidate {
   const reviewed = new Set(reviewedSourceUrls.map(canonicalizeSourceUrl));
   const evidence = candidate.discoveryEvidence ?? [];
   const profileUrl = canonicalizeSourceUrl(reviewedProfessorProfileUrl);
@@ -162,12 +180,14 @@ export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, rev
   if (!reviewed.has(profileUrl) || !evidence.some((item) => item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl)) {
     throw new Error('The professor profile must be explicitly selected from a reviewed official page');
   }
+  if (!reviewedProfessorName.trim()) throw new Error('A professor name confirmed from the reviewed profile is required');
   candidate.discoveryEvidence = evidence.map((item) => ({
     ...item,
     verification: 'reviewed',
     ...(item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl ? { kind: 'professor-profile' as const } : {}),
   }));
   candidate.officialProfileUrl = profileUrl;
+  candidate.name = reviewedProfessorName.trim();
   if (candidate.status === 'needs-evidence') candidate.status = 'ready-for-review';
   return candidate;
 }

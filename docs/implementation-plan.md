@@ -2,34 +2,79 @@
 
 ## Product target
 
-GradReach is a configurable research and outreach agent for the 2027 international MSc application cycle. It should build and maintain a verified pool of 200 professors/programs across the configured countries and regions, covering scholarships and low-tuition programs, then prepare and send up to five tailored professor emails per day. Applicant credentials and document references load from a private profile. A transcript can be added later without rebuilding the profile.
+GradReach is a local research and outreach assistant for 2027 international MSc applications. It targets all countries configured in the private profile, including Canada, Australia, China, Thailand, and Europe (including Portugal and Italy), and supports scholarship and low-tuition routes. Its research target is 200 candidates/programs. It records official-source evidence, keeps unknowns explicit, prepares reviewed drafts, and plans no more than five outreach attempts per calendar day in the configured timezone.
 
-The academic interests and country list are editable configuration. Search and program verification must not silently narrow this scope.
+The applicant profile, credentials, grades, English-test status, funding needs, and document references remain configurable private inputs. The repository must not invent those facts or publish them.
 
 ## Phases and acceptance
 
 | Phase | Goal and scope | Acceptance / verification | State |
 |---|---|---|---|
-| 0 | Initialize repository, instructions, metadata, and profile-safe project plan. | Dedicated Git root; secrets and applicant files ignored; project goal and full scope recorded. | COMPLETE |
-| 1 | Core candidate schema, source evidence fields, duplicate protection, and five-per-day queue rules. | Tests prove evidence gating, deduplication, local-day accounting, cancellation handling, and hard cap of five. | COMPLETE |
-| 2 | Applicant profile plus MongoDB persistence for the private profile, professor candidates, and outreach attempts, including CV/portfolio references and later transcript import. | CRUD persists the profile/candidates/attempts; private profile data stays in its own collection; candidate and attempt indexes and retry-safe attempt writes pass integration tests against an isolated MongoDB database. | COMPLETE |
-| 3 | Research discovery across all configured regions using a search provider and official university pages. | Candidate records contain official profile/program/contact URLs, retrieval time, and source excerpts; no unsupported fields are treated as facts. | IN PROGRESS |
-| 4 | Program eligibility and finance assessment: 2:2/GPA, transcript documents, English evidence, tuition, scholarship and deadlines. | Every assessment has official evidence, uncertainty, source date, and a clear eligible/unclear/ineligible outcome. | NOT STARTED |
-| 5 | Research-fit analysis and personalized email generation based on the applicant profile, verified professor research, and project evidence. | Drafts cite the research fact they refer to; unsupported claims are rejected; duplicate and template-only emails fail review. | NOT STARTED |
-| 6 | Daily scheduler and email provider integration with a five-per-day cap in Africa/Lagos time, audit records, pause/resume, retries, and replies/follow-ups. | Integration tests and a test account prove no sixth send, no duplicate send, no retry duplication, and a working pause. | NOT STARTED |
-| 7 | User interface, 200-contact progress view, review queue, CSV/XLSX export, and complete end-to-end verification. | User can inspect sources/drafts, edit profile and priorities, operate daily queue, and review outcome metrics. | NOT STARTED |
+| 0 | Initialize repository, instructions, metadata, and profile-safe project plan. | Git root and ignore rules are present; no private profile or credential is tracked. | COMPLETE (repository inspection) |
+| 1 | Core candidate schema, source evidence fields, duplicate protection, and five-per-day queue rules. | Node tests cover evidence gating, deduplication, local-day accounting, cancellation, and hard cap. | COMPLETE (tests pass) |
+| 2 | Private applicant profile and MongoDB persistence for candidates, programs, assessments, scheduler control, and attempts. | Isolated MongoDB CRUD, storage separation, unique indexes, attempt idempotency, and cleanup integration test passes. | IN PROGRESS (MONGODB_TEST_URI absent; live integration not run) |
+| 3 | Research discovery across all configured regions using Brave and official university pages. | Deterministic fixture tests pass; limited live Brave request succeeds with configured key. | IN PROGRESS (fixture tests pass; live request failed because network fetch was unavailable) |
+| 4 | Conservative program assessment for classification/GPA, English, tuition, funding, intake, and deadlines. | Facts require reviewed dated HTTPS evidence; unsupported or ambiguous claims remain unclear; isolated MongoDB integration passes. | IN PROGRESS (local tests pass; MongoDB integration not run) |
+| 5 | Research-fit and personalized draft generation using reviewed evidence and applicant inputs. | Template and Gemini adapters are fixture-tested; draft validation requires exact reviewed excerpt/source and duplicate checks; human approval remains required. | COMPLETE (deterministic and mocked-provider tests pass; live Gemini not checked) |
+| 6 | Gmail OAuth/send adapter and safe daily outreach operation. | OAuth state/PKCE, send-only scope, restricted token file, default-disabled sender, daily cap, audit, pause, retry, and reply/follow-up behavior are verified. | IN PROGRESS (OAuth and adapter fixture-tested; no account authorized; no scheduler delivery/retry/reply workflow) |
+| 7 | Local dashboard, 200-contact progress, review queue, export, and end-to-end use. | Dashboard supports candidate/program review and capped queue preparation; configured app flow is verified against isolated MongoDB. | IN PROGRESS (dashboard and CSV fixtures pass; MongoDB end-to-end not run) |
 
-## Current phase boundaries
+## Implemented behavior and boundaries
 
-Phase 1 implements pure queue-selection rules. Phase 2 validates the private local profile at runtime and provides separate MongoDB repositories for profiles, professor candidates, and outreach attempts, plus the explicit `npm run db:indexes` setup command. Attempt writes are idempotent by candidate and scheduled instant. CRUD, private-data separation, uniqueness, attempt idempotency, and indexes passed integration tests against a uniquely named local MongoDB test database. No remote or production database is configured. This phase does not search the web, connect to an email account, create a CV, or send messages. The long-term authorized workflow is five real emails per day, not merely five drafts.
+### Discovery and assessment
 
-Phase 3 provides an opt-in Brave Search API adapter and discovery pipeline that searches each configured country, academic field, research interest, and explicitly reviewed official institution host. Host allowlists match exact HTTPS hostnames only. The pipeline can fetch a result page and its first same-host program and contact links, recording canonical source URLs, retrieval times, and excerpts as unverified evidence. Fetched result pages remain generic official-page leads until a reviewer explicitly classifies one as a professor profile. The pipeline refuses redirects and does not infer emails, professor identity, or eligibility. An explicit review function moves checked evidence to `reviewed` and the lead to `ready-for-review`; it does not approve sending. Mocked tests cover official-host validation, redirect rejection, normalization, deduplication, evidence review, region coverage, timestamps, and API request behavior. The search API credential is read from `SEARCH_PROVIDER_API_KEY`; it was absent during the last live-pilot attempt, so no live search pilot was run. Phase 3 remains in progress pending a configured key and successful limited live pilot.
+Phase 3 searches every configured region, field, and research interest, requires reviewed exact-host HTTPS allowlists, and stores findings as unverified leads with retrieval times and excerpts. Redirects to unapproved hosts are refused. The Brave adapter uses `SEARCH_PROVIDER_API_KEY`. Fixture tests cover query shaping, host validation, redirects, normalization, deduplication, and review gating. A live request was attempted with a generic query; the network fetch failed, so no live-search capability is claimed.
+
+Phase 4 validates reviewed program JSON and keeps unsupported facts unclear. GPA and currency scales are never converted. Affordability is only compared when annual budget and currency are configured. Transcript references can remain in the private profile; transcript parsing is not implemented. Program, assessment, and scheduler repositories/indexes exist, but integration tests are skipped without `MONGODB_TEST_URI`. Do not substitute `MONGODB_URI` unless it is deliberately configured as a disposable test deployment.
+
+### Draft generation
+
+The deterministic draft template and optional `GeminiDraftProvider` use only inputs explicitly supplied by the caller. Choosing the Gemini dashboard option sends the candidate/applicant names, degree, target interest/intake, selected verified excerpt, and source URL to Google's Gemini API; transcript and CV contents are not sent. Gemini output is untrusted and must pass the same source/excerpt and duplicate checks plus human review. `LLM_PROVIDER_API_KEY` and optional `LLM_PROVIDER_MODEL` configure the adapter. No model output approves or sends a message.
+
+### Gmail and outreach
+
+`beginGmailAuthorization` runs a loopback callback with random OAuth state and PKCE. It requests only `https://www.googleapis.com/auth/gmail.send`; it does not request inbox or mailbox access. Tokens go to `EMAIL_PROVIDER_TOKEN_PATH` or the ignored default `private-data/gmail-token.json`; Windows applies a current-user-only file ACL, and other platforms use mode `0600`. The client ID/secret are read from `EMAIL_PROVIDER_CLIENT_ID` and `EMAIL_PROVIDER_CLIENT_SECRET`.
+
+OAuth tokens can be obtained locally, but the Gmail sender is fail-closed even if `OUTREACH_SENDING_ENABLED=true`: it refuses delivery until a reviewed, pause-aware, atomic daily-cap workflow exists. No authorization flow was started, no account was connected, and no email was sent. The terminal app still only prepares queue records; a durable scheduled delivery worker, atomic cross-process day-cap enforcement, retry policy, delivery audit updates, manual reply logging, and follow-up workflow remain incomplete. The send-only scope cannot read replies. The OAuth token exchange rejects a response containing any additional scope.
+
+### Local interface
+
+Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, capped queue-record preparation, reviewed program import, discovery evidence review, draft approval, and formula-safe CSV export. The 200 target is displayed as progress metadata; it does not yet enforce a 200-candidate discovery stopping rule. Running the application end to end requires a private profile and MongoDB configuration.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `MONGODB_URI` | Application MongoDB connection; never point at a personal/production database for tests. |
+| `MONGODB_DATABASE` | Optional application database name. |
+| `MONGODB_TEST_URI` | Explicit disposable MongoDB deployment for integration tests. Each run uses a unique database and drops only that database. |
+| `SEARCH_PROVIDER_API_KEY` | Brave Search API credential. |
+| `LLM_PROVIDER_API_KEY` | Gemini API credential. |
+| `LLM_PROVIDER_MODEL` | Optional Gemini model override. |
+| `EMAIL_PROVIDER_CLIENT_ID` | Google OAuth installed-app client ID. |
+| `EMAIL_PROVIDER_CLIENT_SECRET` | Google OAuth installed-app client secret. |
+| `EMAIL_PROVIDER_TOKEN_PATH` | Optional local token JSON path; default is ignored `private-data/gmail-token.json`. |
+| `OUTREACH_SENDING_ENABLED` | Sending opt-in gate. Leave unset/false; even when true, the current sender remains blocked until the safe delivery workflow is implemented. |
+| `GRADREACH_PROFILE_PATH` | Optional private applicant profile JSON path; default is ignored `private.profile.json`. |
+
+The optional `.env` loader does not override variables already present in the process environment. Never print `.env`, OAuth client material, API keys, tokens, or email contents. `.env`, `private-data/`, local profiles, documents, and generated exports are ignored by Git.
+
+## Setup and verification
+
+1. Install Node.js 22+ and run `npm install`.
+2. Copy `.env.example` to `.env` and set only the local variables needed for the intended operation. Keep sending disabled.
+3. Copy `private.profile.example.json` to the ignored `private.profile.json` and enter only verified profile data.
+4. Run `npm test`, `npm run typecheck`, and `npm run build`. Run `npm run test:mongodb` only with an isolated deployment in `MONGODB_TEST_URI`.
+5. Run `npm run db:indexes` only after checking that `MONGODB_URI` points to the intended application database.
+6. Configure a Google Cloud OAuth consent screen and Desktop app OAuth client, add the account as a test user if the app remains in testing, enable Gmail API, set the two `EMAIL_PROVIDER_*` variables, then run `npm run gmail:connect`. The user must complete the browser consent step locally. This creates tokens but does not send email.
+
+No live Gmail authorization, live send, or production database operation is part of development verification. See [README.md](../README.md) for setup commands and [program-record-format.md](program-record-format.md) for evidence-backed program imports.
 
 ## Main data groups
 
-- Applicant profile: academic background, grading scale, goals, research interests, project links, CV reference, transcript reference, English evidence, timezone, and funding constraints.
+- Applicant profile: academic background, grading scale, goals, research interests, project links, CV/transcript references, English evidence, timezone, and funding constraints.
 - Program: institution, course, intake, deadline, tuition, funding route, entry rules, language rules, documents, and official sources.
 - Professor: institution, department, official profile, research topics, contact channel, evidence URLs, and last-checked time.
-- Outreach: tailored subject/body, source-backed personalization note, approval state, scheduled/sent times, provider message ID, response, and follow-up history.
+- Outreach: source-backed draft, approval state, scheduled/sent times, provider message ID, response, and follow-up history. Several delivery and reply fields/workflows remain planned, not implemented.
 
-Personal documents and credentials are local/private inputs. The public source repository contains no personal CV or transcript.
+Personal applicant documents and credentials are private local inputs. Do not commit a personal CV or transcript.

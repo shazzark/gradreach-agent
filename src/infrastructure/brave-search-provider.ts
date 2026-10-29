@@ -1,3 +1,5 @@
+import './local-env.ts';
+
 export interface SearchResult {
   title: string;
   url: string;

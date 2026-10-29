@@ -1,3 +1,4 @@
+import './local-env.ts';
 import { readFile } from 'node:fs/promises';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
 
