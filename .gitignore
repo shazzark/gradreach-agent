@@ -8,6 +8,9 @@ private.profile.json
 private.profile.*.json
 !private.profile.example.json
 private-data/
+oauth-client*.json
+*gmail-token*.json
+*oauth-token*.json
 uploads/
 outputs/
 *.docx

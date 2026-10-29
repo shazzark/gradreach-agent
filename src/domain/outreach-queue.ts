@@ -46,6 +46,12 @@ export interface OutreachAttempt {
   state: 'queued' | 'sent' | 'cancelled';
 }
 
+export interface SchedulerControl {
+  paused: boolean;
+  timeZone: string;
+  dailyLimit: number;
+}
+
 export interface QueueSelection {
   dateKey: string;
   limit: number;
@@ -76,7 +82,7 @@ function hasSecureUrl(value: string | undefined): value is string {
   }
 }
 
-function candidateReadinessIssue(candidate: ProfessorCandidate): string | undefined {
+export function candidateReadinessIssue(candidate: ProfessorCandidate): string | undefined {
   if (!candidate.approvedForSending || candidate.status !== 'approved') {
     return 'not approved for sending';
   }

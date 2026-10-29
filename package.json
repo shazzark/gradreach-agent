@@ -11,9 +11,11 @@
     "test": "node --experimental-strip-types --test",
     "test:mongodb": "node --experimental-strip-types --test test/mongo-storage.integration.test.ts",
     "test:watch": "node --experimental-strip-types --test --watch",
+    "app": "node --experimental-strip-types src/interfaces/terminal-app.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",
-    "db:indexes": "node --experimental-strip-types src/infrastructure/create-phase2-indexes.ts"
+    "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",
+    "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
