@@ -4,7 +4,7 @@ Local research and outreach assistance for the 2027 international MSc applicatio
 
 ## Current status
 
-The dependency-free core, discovery fixtures, program assessment, source-cited drafts, dashboard, and provider adapters have automated tests. Live Brave search could not be verified because the network request failed. MongoDB integration was skipped because `MONGODB_TEST_URI` is not configured. Gemini has mocked-provider coverage but was not live-tested. Gmail OAuth and sending remain unconnected; sending stays disabled by default, and the app does not contact professors. The scheduled sender, retry/reply/follow-up workflow, and cross-process atomic cap are not complete. See [the phase plan](docs/implementation-plan.md) for exact status.
+The dependency-free core, discovery fixtures, program assessment, source-cited drafts, dashboard, and provider adapters have automated tests. Live Brave search and a generic Gemini smoke request could not be verified because network fetches failed. MongoDB integration was skipped because `MONGODB_TEST_URI` is not configured. Gmail OAuth and sending remain unconnected; sending stays disabled by default, and the app does not contact professors. The scheduled sender, retry/reply/follow-up workflow, and cross-process atomic cap are not complete. See [the phase plan](docs/implementation-plan.md) for exact status.
 
 ## Requirements and local checks
 
