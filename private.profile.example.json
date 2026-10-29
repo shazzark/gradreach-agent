@@ -22,6 +22,8 @@
       "researchInterests": [],
       "countries": [],
       "fundingTypes": ["scholarship", "low-tuition"],
+      "maxAnnualTuition": null,
+      "tuitionCurrency": "",
       "timezone": "Africa/Lagos"
     },
     "englishEvidence": {

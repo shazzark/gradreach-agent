@@ -1,7 +1,9 @@
+import './local-env.ts';
 import { MongoClient } from 'mongodb';
 import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
-import type { OutreachAttempt, ProfessorCandidate } from '../domain/outreach-queue.ts';
+import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
+import type { ProgramAssessment, ProgramRecord } from '../domain/program-assessment.ts';
 
 interface StoredProfile extends Document {
   _id: string;
@@ -19,6 +21,24 @@ interface StoredCandidate extends Document {
 interface StoredAttempt extends Document {
   _id: string;
   attempt: OutreachAttempt;
+  updatedAt: Date;
+}
+
+interface StoredProgram extends Document {
+  _id: string;
+  program: ProgramRecord;
+  updatedAt: Date;
+}
+
+interface StoredProgramAssessment extends Document {
+  _id: string;
+  assessment: ProgramAssessment;
+  updatedAt: Date;
+}
+
+interface StoredSchedulerControl extends Document {
+  _id: 'daily-scheduler';
+  control: SchedulerControl;
   updatedAt: Date;
 }
 
@@ -118,10 +138,81 @@ export class OutreachAttemptRepository {
   }
 }
 
+export class ProgramRepository {
+  private readonly collection: Collection<StoredProgram>;
+
+  constructor(collection: Collection<StoredProgram>) { this.collection = collection; }
+
+  async get(programId: string): Promise<ProgramRecord | undefined> {
+    return (await this.collection.findOne({ _id: programId }))?.program;
+  }
+
+  async list(): Promise<ProgramRecord[]> {
+    const documents = await this.collection.find().sort({ 'program.country': 1, 'program.institution': 1, 'program.name': 1 }).toArray();
+    return documents.map((document) => document.program);
+  }
+
+  async save(program: ProgramRecord): Promise<void> {
+    await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
+  }
+
+  async delete(programId: string): Promise<boolean> {
+    const result = await this.collection.deleteOne({ _id: programId });
+    return result.deletedCount === 1;
+  }
+}
+
+export class ProgramAssessmentRepository {
+  private readonly collection: Collection<StoredProgramAssessment>;
+
+  constructor(collection: Collection<StoredProgramAssessment>) { this.collection = collection; }
+
+  async latest(programId: string): Promise<ProgramAssessment | undefined> {
+    const stored = await this.collection.find({ 'assessment.programId': programId })
+      .sort({ 'assessment.assessedAt': -1 }).limit(1).next();
+    return stored?.assessment;
+  }
+
+  /** Assessment timestamps form the idempotency key, retaining each dated reassessment. */
+  async save(assessment: ProgramAssessment): Promise<void> {
+    const assessedAt = new Date(assessment.assessedAt);
+    if (Number.isNaN(assessedAt.getTime())) throw new Error('assessment.assessedAt must be a valid date');
+    const timestamp = assessedAt.toISOString();
+    const id = `${assessment.programId}:${timestamp}`;
+    const normalizedAssessment = { ...assessment, assessedAt: timestamp };
+    await this.collection.replaceOne({ _id: id }, { _id: id, assessment: normalizedAssessment, updatedAt: new Date() }, { upsert: true });
+  }
+}
+
+export class SchedulerControlRepository {
+  private readonly collection: Collection<StoredSchedulerControl>;
+
+  constructor(collection: Collection<StoredSchedulerControl>) { this.collection = collection; }
+
+  async get(): Promise<SchedulerControl | undefined> {
+    return (await this.collection.findOne({ _id: 'daily-scheduler' }))?.control;
+  }
+
+  async save(control: SchedulerControl): Promise<void> {
+    if (!Number.isInteger(control.dailyLimit) || control.dailyLimit < 1 || control.dailyLimit > 5) {
+      throw new Error('dailyLimit must be an integer from 1 to 5');
+    }
+    if (typeof control.paused !== 'boolean') throw new Error('paused must be a boolean');
+    try { new Intl.DateTimeFormat('en', { timeZone: control.timeZone }); }
+    catch { throw new Error('timeZone must be a valid IANA timezone'); }
+    await this.collection.replaceOne(
+      { _id: 'daily-scheduler' }, { _id: 'daily-scheduler', control, updatedAt: new Date() }, { upsert: true },
+    );
+  }
+}
+
 export interface GradReachRepositories {
   profiles: ApplicantProfileRepository;
   candidates: ProfessorCandidateRepository;
   attempts: OutreachAttemptRepository;
+  programs: ProgramRepository;
+  assessments: ProgramAssessmentRepository;
+  schedulerControl: SchedulerControlRepository;
 }
 
 /** Creates repositories without creating indexes as a side effect of application startup. */
@@ -130,7 +221,20 @@ export function createRepositories(db: Db): GradReachRepositories {
     profiles: new ApplicantProfileRepository(db.collection<StoredProfile>('applicant_profiles')),
     candidates: new ProfessorCandidateRepository(db.collection<StoredCandidate>('professor_candidates')),
     attempts: new OutreachAttemptRepository(db.collection<StoredAttempt>('outreach_attempts')),
+    programs: new ProgramRepository(db.collection<StoredProgram>('programs')),
+    assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
+    schedulerControl: new SchedulerControlRepository(db.collection<StoredSchedulerControl>('outreach_control')),
   };
+}
+
+/** Creates indexes for program identity and dated assessment history. */
+export async function createPhase4Indexes(db: Db): Promise<void> {
+  await db.collection<StoredProgram>('programs').createIndex(
+    { 'program.country': 1, 'program.institution': 1, 'program.name': 1 }, { name: 'programs_by_country_institution' },
+  );
+  await db.collection<StoredProgramAssessment>('program_assessments').createIndex(
+    { 'assessment.programId': 1, 'assessment.assessedAt': -1 }, { name: 'assessments_by_program_and_date' },
+  );
 }
 
 /** Run as an explicit deployment step after reviewing the target database. */

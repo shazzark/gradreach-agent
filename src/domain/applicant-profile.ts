@@ -22,6 +22,8 @@ export interface ApplicantProfile {
       researchInterests: string[];
       countries: string[];
       fundingTypes: string[];
+      maxAnnualTuition: number | null;
+      tuitionCurrency: string;
       timezone: string;
     };
     englishEvidence: {
@@ -88,6 +90,10 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
   } catch {
     throw new Error('profile.applicant.target.timezone must be a valid IANA timezone');
   }
+  const maxAnnualTuition = target.maxAnnualTuition === undefined ? null : nullableNumberField(target, 'maxAnnualTuition', 'profile.applicant.target');
+  const tuitionCurrency = target.tuitionCurrency === undefined ? '' : stringField(target, 'tuitionCurrency', 'profile.applicant.target');
+  if (maxAnnualTuition !== null && maxAnnualTuition < 0) throw new Error('profile.applicant.target.maxAnnualTuition must not be negative');
+  if (maxAnnualTuition !== null && !tuitionCurrency.trim()) throw new Error('profile.applicant.target.tuitionCurrency is required when maxAnnualTuition is set');
 
   return {
     applicant: {
@@ -113,6 +119,9 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
         researchInterests: stringArrayField(target, 'researchInterests', 'profile.applicant.target'),
         countries: stringArrayField(target, 'countries', 'profile.applicant.target'),
         fundingTypes: stringArrayField(target, 'fundingTypes', 'profile.applicant.target'),
+        // Older private profiles remain readable and simply leave affordability unresolved.
+        maxAnnualTuition,
+        tuitionCurrency,
         timezone,
       },
       englishEvidence: {
