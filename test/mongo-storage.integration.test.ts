@@ -38,7 +38,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
   skip: !mongoUri ? 'Set MONGODB_TEST_URI to an isolated test deployment to run MongoDB integration checks' : false,
 }, async () => {
   const client = new MongoClient(mongoUri!);
-  const databaseName = `gradreach_test_${randomUUID().replaceAll('-', '')}`;
+  const databaseName = `gradreach_test_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
   let db;
   try {
     await client.connect();
