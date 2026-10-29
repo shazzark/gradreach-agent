@@ -16,7 +16,7 @@ The applicant profile, credentials, grades, English-test status, funding needs, 
 | 3 | Research discovery across all configured regions using Brave and official university pages. | Deterministic fixture tests pass; limited live Brave request succeeds with configured key. | IN PROGRESS (fixture tests pass; live request failed because network fetch was unavailable) |
 | 4 | Conservative program assessment for classification/GPA, English, tuition, funding, intake, and deadlines. | Facts require reviewed dated HTTPS evidence; unsupported or ambiguous claims remain unclear; isolated MongoDB integration passes. | IN PROGRESS (local tests pass; MongoDB integration not run) |
 | 5 | Research-fit and personalized draft generation using reviewed evidence and applicant inputs. | Template and Gemini adapters are fixture-tested; draft validation requires exact reviewed excerpt/source and duplicate checks; human approval remains required. | COMPLETE (deterministic and mocked-provider tests pass; live Gemini smoke request failed at network access) |
-| 6 | Gmail OAuth/send adapter and safe daily outreach operation. | OAuth state/PKCE, send-only scope, restricted token file, default-disabled sender, daily cap, audit, pause, retry, and reply/follow-up behavior are verified. | IN PROGRESS (OAuth and adapter fixture-tested; no account authorized; no scheduler delivery/retry/reply workflow) |
+| 6 | Gmail OAuth/send adapter and safe daily outreach operation. | OAuth state/PKCE, send-only scope, restricted token file, default-disabled sender, approval-bound delivery, atomic local-day cap, idempotent audit, pause, retry, and manual reply/follow-up behavior are verified. | IN PROGRESS (mocked delivery, cap concurrency, retry, approval, and pause tests pass; live MongoDB and Gmail authorization/send remain unverified) |
 | 7 | Local dashboard, 200-contact discovery target, review queue, export, and end-to-end use. | Discovery deduplicates canonical results and stops saving/searching when the configured pool reaches 200; dashboard progress and CSV behavior pass fixtures; configured app flow is verified against isolated MongoDB. | IN PROGRESS (200-target and dashboard fixtures pass; MongoDB end-to-end not run) |
 
 ## Implemented behavior and boundaries
@@ -25,7 +25,7 @@ The applicant profile, credentials, grades, English-test status, funding needs, 
 
 Phase 3 searches every configured region, field, and research interest, requires reviewed exact-host HTTPS allowlists, and stores findings as unverified leads with retrieval times and excerpts. Redirects to unapproved hosts are refused. The Brave adapter uses `SEARCH_PROVIDER_API_KEY`. Fixture tests cover query shaping, host validation, redirects, normalization, deduplication, and review gating. A live request was attempted with a generic query; the network fetch failed, so no live-search capability is claimed.
 
-Phase 4 validates reviewed program JSON and keeps unsupported facts unclear. GPA and currency scales are never converted. Affordability is only compared when annual budget and currency are configured. Transcript references can remain in the private profile; transcript parsing is not implemented. Program, assessment, and scheduler repositories/indexes exist, but integration tests are skipped without `MONGODB_TEST_URI`. Do not substitute `MONGODB_URI` unless it is deliberately configured as a disposable test deployment.
+Phase 4 validates reviewed program JSON and keeps unsupported facts unclear. GPA and currency scales are never converted. Affordability is only compared when annual budget and currency are configured. Transcript references can remain in the private profile; transcript parsing is not implemented. Program, assessment, and scheduler repositories/indexes exist. Their MongoDB integration test is skipped without `MONGODB_TEST_URI`. Do not substitute `MONGODB_URI` unless it is deliberately configured as a disposable test deployment.
 
 ### Draft generation
 
@@ -35,7 +35,9 @@ The deterministic draft template and optional `GeminiDraftProvider` use only inp
 
 `beginGmailAuthorization` runs a loopback callback with random OAuth state and PKCE. It requests only `https://www.googleapis.com/auth/gmail.send`; it does not request inbox or mailbox access. Tokens go to `EMAIL_PROVIDER_TOKEN_PATH` or the ignored default `private-data/gmail-token.json`; Windows applies a current-user-only file ACL, and other platforms use mode `0600`. The client ID/secret are read from `EMAIL_PROVIDER_CLIENT_ID` and `EMAIL_PROVIDER_CLIENT_SECRET`.
 
-OAuth tokens can be obtained locally, but the Gmail sender is fail-closed even if `OUTREACH_SENDING_ENABLED=true`: it refuses delivery until a reviewed, pause-aware, atomic daily-cap workflow exists. No authorization flow was started, no account was connected, and no email was sent. The terminal app still only prepares queue records; a durable scheduled delivery worker, atomic cross-process day-cap enforcement, retry policy, delivery audit updates, manual reply logging, and follow-up workflow remain incomplete. The send-only scope cannot read replies. The OAuth token exchange rejects a response containing any additional scope.
+`GmailDeliveryService` remains disabled unless `OUTREACH_SENDING_ENABLED=true`. It delivers only a saved draft whose exact content fingerprint was approved, whose official profile/contact/program evidence remains reviewed, and whose recipient matches the queued address. Mongo claims audit rows atomically, records attempts and provider IDs, reserves the five-message limit atomically per configured local date, blocks while paused, retries only definitive retryable failures (up to three attempts), and marks uncertain outcomes without automatic resend. Queue creation is idempotent by candidate and scheduled instant. The `npm run outreach:scheduler` worker polls once per minute; by default it exits without sending. Keep the account disconnected and the opt-in false during development. No live Gmail authorization or sending was performed. Pause takes effect for future delivery claims; an already in-flight provider request may complete.
+
+The application uses only `https://www.googleapis.com/auth/gmail.send`, so it cannot read replies. The terminal app supports manual reply and follow-up status recording without storing reply contents. Gmail authorization keeps the existing loopback callback, state validation, PKCE, and restricted local token storage; the token exchange rejects any expanded scope. Mock-provider tests do not establish live Gmail or MongoDB behavior.
 
 ### Local interface
 
@@ -54,7 +56,7 @@ Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, ca
 | `EMAIL_PROVIDER_CLIENT_ID` | Google OAuth installed-app client ID. |
 | `EMAIL_PROVIDER_CLIENT_SECRET` | Google OAuth installed-app client secret. |
 | `EMAIL_PROVIDER_TOKEN_PATH` | Optional local token JSON path; default is ignored `private-data/gmail-token.json`. |
-| `OUTREACH_SENDING_ENABLED` | Sending opt-in gate. Leave unset/false; even when true, the current sender remains blocked until the safe delivery workflow is implemented. |
+| `OUTREACH_SENDING_ENABLED` | Exact string `true` opts the scheduler into delivery; otherwise delivery stays disabled. Leave unset/false except during explicitly approved operation. |
 | `GRADREACH_PROFILE_PATH` | Optional private applicant profile JSON path; default is ignored `private.profile.json`. |
 
 The optional `.env` loader does not override variables already present in the process environment. Never print `.env`, OAuth client material, API keys, tokens, or email contents. `.env`, `private-data/`, local profiles, documents, and generated exports are ignored by Git.
@@ -67,6 +69,7 @@ The optional `.env` loader does not override variables already present in the pr
 4. Run `npm test`, `npm run typecheck`, and `npm run build`. Run `npm run test:mongodb` only with an isolated deployment in `MONGODB_TEST_URI`.
 5. Run `npm run db:indexes` only after checking that `MONGODB_URI` points to the intended application database.
 6. Configure a Google Cloud OAuth consent screen and Desktop app OAuth client, add the account as a test user if the app remains in testing, enable Gmail API, set the two `EMAIL_PROVIDER_*` variables, then run `npm run gmail:connect`. The user must complete the browser consent step locally. This creates tokens but does not send email.
+7. The delivery worker is `npm run outreach:scheduler`. It checks the send opt-in on startup, polls every minute, and requires connected Gmail OAuth, MongoDB, an unpaused scheduler, and an explicitly approved draft. Keep the opt-in false during development. Do not use this command to test against real recipients. Set the configured profile timezone to `Africa/Lagos` for the current local-day cap.
 
 No live Gmail authorization, live send, or production database operation is part of development verification. See [README.md](../README.md) for setup commands and [program-record-format.md](program-record-format.md) for evidence-backed program imports.
 

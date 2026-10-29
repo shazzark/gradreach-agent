@@ -23,6 +23,8 @@ export interface ProfessorCandidate {
   discoveryEvidence?: DiscoveryEvidence[];
   fitSummary?: string;
   personalizedDraft?: string;
+  approvedDraftHash?: string;
+  approvedAt?: string;
   status: CandidateStatus;
   approvedForSending: boolean;
   priority: number;
@@ -43,7 +45,17 @@ export interface OutreachAttempt {
   candidateId: string;
   recipientEmail: string;
   scheduledFor: string;
-  state: 'queued' | 'sent' | 'cancelled';
+  state: 'queued' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'cancelled';
+  deliveryAttempts?: number;
+  lastAttemptAt?: string;
+  nextAttemptAt?: string;
+  sentAt?: string;
+  providerMessageId?: string;
+  failureCode?: string;
+  replyStatus?: 'replied' | 'no-response' | 'declined';
+  replyRecordedAt?: string;
+  followUpStatus?: 'not-planned' | 'due' | 'scheduled' | 'sent' | 'closed';
+  followUpScheduledFor?: string;
 }
 
 export interface SchedulerControl {

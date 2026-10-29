@@ -72,6 +72,11 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     await repositories.schedulerControl.save(schedulerControl);
     assert.deepEqual(await repositories.schedulerControl.get(), schedulerControl);
     await assert.rejects(repositories.schedulerControl.save({ ...schedulerControl, dailyLimit: 6 }), /dailyLimit must be an integer from 1 to 5/);
+    assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-19T10:00:00Z'), false);
+    await repositories.schedulerControl.save({ ...schedulerControl, paused: false });
+    for (let index = 0; index < 5; index += 1) assert.equal(await repositories.schedulerControl.reserveDailySend(`2026-10-19T10:0${index}:00Z`), true);
+    assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-19T10:05:00Z'), false);
+    assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-20T00:00:00Z'), true);
 
     const attempt: OutreachAttempt = {
       candidateId: 'candidate-b',
@@ -80,9 +85,15 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
       state: 'queued',
     };
     await repositories.attempts.record(attempt);
-    await repositories.attempts.record({ ...attempt, scheduledFor: '2026-10-19T09:00:00Z', state: 'sent' });
-    assert.deepEqual(await repositories.attempts.listAll(), [{ ...attempt, scheduledFor: '2026-10-19T09:00:00.000Z', state: 'sent' }]);
-    assert.deepEqual(await repositories.attempts.listForCandidate('candidate-b'), [{ ...attempt, scheduledFor: '2026-10-19T09:00:00.000Z', state: 'sent' }]);
+    const canonicalAttempt = { ...attempt, scheduledFor: '2026-10-19T09:00:00.000Z' };
+    assert.deepEqual(await repositories.attempts.listAll(), [canonicalAttempt]);
+    const claimed = await repositories.attempts.claimForDelivery(canonicalAttempt, '2026-10-19T08:00:00Z', 3);
+    assert.equal(claimed?.state, 'sending');
+    assert.equal(claimed?.deliveryAttempts, 1);
+    const sent = { ...claimed!, state: 'sent' as const, sentAt: '2026-10-19T08:00:01.000Z', providerMessageId: 'mock-message-id' };
+    assert.equal(await repositories.attempts.updateDelivery(sent), true);
+    assert.deepEqual(await repositories.attempts.listAll(), [sent]);
+    assert.deepEqual(await repositories.attempts.listForCandidate('candidate-b'), [sent]);
     await assert.rejects(
       repositories.attempts.record({ ...attempt, scheduledFor: 'not-a-date' }),
       /attempt.scheduledFor must be a valid date/,
@@ -98,6 +109,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     });
     assert.equal(attemptDocument?.profile, undefined);
     assert.equal(attemptDocument?.candidate, undefined);
+    assert.equal((attemptDocument?.attempt as OutreachAttempt | undefined)?.providerMessageId, 'mock-message-id');
     const candidateIndexes = await db.collection('professor_candidates').listIndexes().toArray();
     const attemptIndexes = await db.collection('outreach_attempts').listIndexes().toArray();
     const assessmentIndexes = await db.collection('program_assessments').listIndexes().toArray();

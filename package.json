@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",
     "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",
-    "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts"
+    "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts",
+    "outreach:scheduler": "node --experimental-strip-types src/interfaces/outreach-scheduler.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

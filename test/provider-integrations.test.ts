@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { beginGmailAuthorization, GmailSender, GMAIL_SEND_SCOPE } from '../src/infrastructure/gmail-oauth.ts';
+import { beginGmailAuthorization, GMAIL_SEND_SCOPE } from '../src/infrastructure/gmail-oauth.ts';
 import { GeminiDraftProvider } from '../src/infrastructure/gemini-draft-provider.ts';
 
 test('Gmail OAuth asks for send-only scope and stores callback tokens with owner-only mode', async () => {
@@ -42,16 +42,6 @@ test('Gmail OAuth asks for send-only scope and stores callback tokens with owner
     }
     await rm(folder, { recursive: true, force: true });
   }
-});
-
-test('Gmail sender refuses by default and stays blocked until cap-enforcing delivery exists', async () => {
-  let called = false;
-  const fetchImpl = async () => { called = true; return Response.json({}); };
-  const sender = new GmailSender({ tokenPath: 'unused', sendingEnabled: false, fetchImpl });
-  await assert.rejects(sender.send({ to: 'professor@example.edu', subject: 'Hello', body: 'Draft' }), /sending is disabled/);
-  const enabledButUnorchestrated = new GmailSender({ tokenPath: 'unused', sendingEnabled: true, fetchImpl });
-  await assert.rejects(enabledButUnorchestrated.send({ to: 'professor@example.edu', subject: 'Hello', body: 'Draft' }), /daily-cap delivery workflow/);
-  assert.equal(called, false);
 });
 
 test('Gmail OAuth rejects and does not store an expanded scope set', async () => {

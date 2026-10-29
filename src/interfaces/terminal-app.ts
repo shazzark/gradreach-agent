@@ -46,7 +46,7 @@ async function run(): Promise<void> {
     const ask = (prompt: string) => readline.question(prompt);
 
     for (;;) {
-      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  0 Exit\n');
+      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status  0 Exit\n');
       const choice = (await ask('Choose an option: ')).trim();
       if (choice === '0') break;
 
@@ -202,6 +202,20 @@ async function run(): Promise<void> {
         candidate.fitSummary = `Gemini wording uses reviewed excerpt "${draft.personalizationExcerpt}" for configured interest "${interest}". Source: ${draft.personalizationSourceUrl}`;
         await repositories.candidates.save(candidate);
         stdout.write(`Gemini draft saved for human review; it has not been approved or sent.\n${JSON.stringify(draft, null, 2)}\n`);
+      } else if (choice === '13') {
+        const candidateId = (await ask('Candidate ID with a sent message: ')).trim();
+        const replyChoice = (await ask('Reply status: 1 replied, 2 no response, 3 declined: ')).trim();
+        const replyStatus = replyChoice === '1' ? 'replied' : replyChoice === '2' ? 'no-response' : replyChoice === '3' ? 'declined' : undefined;
+        if (!replyStatus) { stdout.write('Unknown reply status.\n'); continue; }
+        const followChoice = (await ask('Follow-up: 1 not planned, 2 due, 3 scheduled, 4 closed: ')).trim();
+        const followUpStatus = followChoice === '1' ? 'not-planned' : followChoice === '2' ? 'due' : followChoice === '3' ? 'scheduled' : followChoice === '4' ? 'closed' : undefined;
+        if (!followUpStatus) { stdout.write('Unknown follow-up status.\n'); continue; }
+        const followUpScheduledFor = followUpStatus === 'scheduled' ? (await ask('Follow-up time (ISO date/time): ')).trim() : undefined;
+        const recorded = await repositories.attempts.recordManualOutcome({
+          candidateId, replyStatus, followUpStatus, recordedAt: new Date().toISOString(),
+          ...(followUpScheduledFor ? { followUpScheduledFor } : {}),
+        });
+        stdout.write(recorded ? 'Manual response/follow-up status saved. Message contents were not stored.\n' : 'No sent outreach was found for that candidate.\n');
       } else {
         stdout.write('Unknown option.\n');
       }

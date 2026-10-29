@@ -6,6 +6,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import type { Server } from 'node:http';
+import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
+import { candidateReadinessIssue } from '../domain/outreach-queue.ts';
+import { validateOutreachDraft, type OutreachDraft } from '../application/outreach-draft.ts';
+import { draftFingerprint } from '../application/outreach-review.ts';
 
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -148,45 +152,181 @@ async function accessToken(path: string, clientId: string, clientSecret: string,
   return refreshed.access_token;
 }
 
-export interface GmailMessage {
+interface GmailMessage {
   to: string;
   subject: string;
   body: string;
 }
 
-/** Gmail API send adapter. Sending remains inert unless both gates are explicitly open. */
-export class GmailSender {
-  private readonly options: { tokenPath?: string; clientId?: string; clientSecret?: string; sendingEnabled?: boolean; fetchImpl?: typeof fetch };
+export class GmailDeliveryError extends Error {
+  readonly code: string;
+  readonly certainty: 'not-sent' | 'unknown';
+  readonly retryable: boolean;
 
-  constructor(options: { tokenPath?: string; clientId?: string; clientSecret?: string; sendingEnabled?: boolean; fetchImpl?: typeof fetch } = {}) {
-    this.options = options;
+  constructor(code: string, certainty: 'not-sent' | 'unknown', retryable: boolean) {
+    super(code);
+    this.code = code;
+    this.certainty = certainty;
+    this.retryable = retryable;
+    this.name = 'GmailDeliveryError';
   }
+}
 
-  async send(message: GmailMessage): Promise<string> {
-    if ((this.options.sendingEnabled ?? process.env.OUTREACH_SENDING_ENABLED) !== true && (this.options.sendingEnabled ?? process.env.OUTREACH_SENDING_ENABLED) !== 'true') {
-      throw new Error('Email sending is disabled; set OUTREACH_SENDING_ENABLED=true only after explicit review and approval');
-    }
-    throw new Error('Gmail delivery is unavailable until the approved, pause-aware daily-cap delivery workflow is implemented');
+async function sendGmailMessage(message: GmailMessage): Promise<string> {
+  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(message.to) || /[\r\n]/.test(message.to + message.subject) || !message.subject.trim() || !message.body.trim()) {
+    throw new GmailDeliveryError('invalid-message', 'not-sent', false);
   }
-
-  async #sendApprovedMessage(message: GmailMessage): Promise<string> {
-    if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(message.to) || /[\r\n]/.test(message.to + message.subject) || !message.subject.trim() || !message.body.trim()) {
-      throw new Error('Gmail message fields are invalid');
-    }
-    const path = this.options.tokenPath ?? process.env.EMAIL_PROVIDER_TOKEN_PATH ?? 'private-data/gmail-token.json';
-    const clientId = this.options.clientId ?? requiredEnv('EMAIL_PROVIDER_CLIENT_ID');
-    const clientSecret = this.options.clientSecret ?? requiredEnv('EMAIL_PROVIDER_CLIENT_SECRET');
-    const fetchImpl = this.options.fetchImpl ?? fetch;
-    const token = await accessToken(path, clientId, clientSecret, fetchImpl);
-    const subject = `=?UTF-8?B?${Buffer.from(message.subject).toString('base64')}?=`;
-    const mime = `To: ${message.to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${message.body.replace(/\r?\n/g, '\r\n')}`;
-    const response = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+  const path = process.env.EMAIL_PROVIDER_TOKEN_PATH ?? 'private-data/gmail-token.json';
+  const clientId = requiredEnv('EMAIL_PROVIDER_CLIENT_ID');
+  const clientSecret = requiredEnv('EMAIL_PROVIDER_CLIENT_SECRET');
+  let token: string;
+  try { token = await accessToken(path, clientId, clientSecret, fetch); }
+  catch { throw new GmailDeliveryError('gmail-auth-unavailable', 'not-sent', true); }
+  const subject = `=?UTF-8?B?${Buffer.from(message.subject).toString('base64')}?=`;
+  const mime = `To: ${message.to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${message.body.replace(/\r?\n/g, '\r\n')}`;
+  let response: Response;
+  try {
+    response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ raw: Buffer.from(mime).toString('base64url') }), signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) throw new Error(`Gmail send failed with HTTP ${response.status}`);
-    const payload = await response.json() as { id?: unknown };
-    if (typeof payload.id !== 'string') throw new Error('Gmail send response did not include a message ID');
-    return payload.id;
+  } catch { throw new GmailDeliveryError('gmail-transport-outcome-unknown', 'unknown', false); }
+  if (!response.ok) {
+    if (response.status === 429) throw new GmailDeliveryError('gmail-rate-limited', 'not-sent', true);
+    if (response.status >= 400 && response.status < 500) throw new GmailDeliveryError(`gmail-rejected-${response.status}`, 'not-sent', false);
+    throw new GmailDeliveryError(`gmail-server-${response.status}-outcome-unknown`, 'unknown', false);
+  }
+  let payload: { id?: unknown };
+  try { payload = await response.json() as { id?: unknown }; }
+  catch { throw new GmailDeliveryError('gmail-response-outcome-unknown', 'unknown', false); }
+  if (typeof payload.id !== 'string') throw new GmailDeliveryError('gmail-message-id-missing-outcome-unknown', 'unknown', false);
+  return payload.id;
+}
+
+export interface GmailDeliveryResult {
+  status: 'disabled' | 'paused' | 'empty' | 'delivered' | 'daily-cap' | 'failed' | 'uncertain';
+  candidateId?: string;
+  attemptCount?: number;
+  recoveredUncertain?: number;
+}
+
+interface GmailDeliveryDependencies {
+  repositories: {
+    attempts: {
+      listAll(): Promise<OutreachAttempt[]>;
+      claimForDelivery(attempt: OutreachAttempt, now: string, maxAttempts: number): Promise<OutreachAttempt | undefined>;
+      updateDelivery(attempt: OutreachAttempt): Promise<boolean>;
+      releaseClaim(attempt: OutreachAttempt): Promise<void>;
+      rejectQueued(attempt: OutreachAttempt, failureCode: string): Promise<void>;
+      recoverStaleSending(before: string): Promise<number>;
+    };
+    candidates: {
+      get(candidateId: string): Promise<ProfessorCandidate | undefined>;
+      markSent(candidateId: string): Promise<boolean>;
+    };
+    schedulerControl: {
+      get(): Promise<SchedulerControl | undefined>;
+      reserveDailySend(now: string): Promise<boolean>;
+    };
+  };
+  /** Test seam for deterministic provider fixtures; production defaults to Gmail. */
+  send?: (message: GmailMessage) => Promise<string>;
+}
+
+/** Delivers one due, explicitly approved draft through atomic audit and local-day reservations. */
+export class GmailDeliveryService {
+  private readonly repositories: GmailDeliveryDependencies['repositories'];
+  private readonly send: (message: GmailMessage) => Promise<string>;
+  private readonly sendingEnabled: boolean;
+  private readonly maxAttempts = 3;
+  private readonly staleAfterMs = 5 * 60 * 1000;
+
+  constructor(options: GmailDeliveryDependencies & { sendingEnabled?: boolean }) {
+    this.repositories = options.repositories;
+    this.send = options.send ?? sendGmailMessage;
+    this.sendingEnabled = options.sendingEnabled ?? process.env.OUTREACH_SENDING_ENABLED === 'true';
+  }
+
+  async deliverNext(now = new Date().toISOString()): Promise<GmailDeliveryResult> {
+    if (!this.sendingEnabled) return { status: 'disabled' };
+    const instant = new Date(now);
+    if (Number.isNaN(instant.getTime())) throw new Error('now must be a valid date');
+    const recoveredUncertain = await this.repositories.attempts.recoverStaleSending(new Date(instant.getTime() - this.staleAfterMs).toISOString());
+    const control = await this.repositories.schedulerControl.get();
+    if (!control || control.paused) return { status: 'paused', recoveredUncertain };
+    const attempts = await this.repositories.attempts.listAll();
+    const due = attempts.filter((attempt) =>
+      (attempt.state === 'queued' || (attempt.state === 'failed' && attempt.nextAttemptAt && new Date(attempt.nextAttemptAt) <= instant)) &&
+      new Date(attempt.scheduledFor) <= instant,
+    ).sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor));
+    if (!due.length) return { status: 'empty', recoveredUncertain };
+
+    for (const pending of due) {
+      const candidate = await this.repositories.candidates.get(pending.candidateId);
+      const invalid = this.validateApprovedDelivery(candidate, pending, attempts);
+      if (invalid) {
+        await this.repositories.attempts.rejectQueued(pending, invalid);
+        continue;
+      }
+      const claimed = await this.repositories.attempts.claimForDelivery(pending, instant.toISOString(), this.maxAttempts);
+      if (!claimed) continue;
+      if (!await this.repositories.schedulerControl.reserveDailySend(instant.toISOString())) {
+        await this.repositories.attempts.releaseClaim(claimed);
+        const latest = await this.repositories.schedulerControl.get();
+        return { status: latest?.paused ? 'paused' : 'daily-cap', recoveredUncertain };
+      }
+      const draft = JSON.parse(candidate!.personalizedDraft!) as OutreachDraft;
+      try {
+        const providerMessageId = await this.send({ to: draft.recipientEmail, subject: draft.subject, body: draft.body });
+        const sent: OutreachAttempt = {
+          ...claimed, state: 'sent', sentAt: instant.toISOString(), providerMessageId,
+        };
+        await this.repositories.attempts.updateDelivery(sent);
+        await this.repositories.candidates.markSent(candidate!.id);
+        return { status: 'delivered', candidateId: candidate!.id, attemptCount: sent.deliveryAttempts ?? 1, recoveredUncertain };
+      } catch (error) {
+        const failure = error instanceof GmailDeliveryError ? error : new GmailDeliveryError('provider-outcome-unknown', 'unknown', false);
+        const attemptCount = claimed.deliveryAttempts ?? 1;
+        const nextAttemptAt = failure.certainty === 'not-sent' && failure.retryable && attemptCount < this.maxAttempts
+          ? new Date(instant.getTime() + Math.min(60_000 * 2 ** attemptCount, 15 * 60_000)).toISOString()
+          : undefined;
+        const failed: OutreachAttempt = {
+          ...claimed,
+          state: failure.certainty === 'unknown' ? 'uncertain' : 'failed',
+          failureCode: failure.code,
+          ...(nextAttemptAt ? { nextAttemptAt } : {}),
+        };
+        await this.repositories.attempts.updateDelivery(failed);
+        return { status: failed.state === 'uncertain' ? 'uncertain' : 'failed', candidateId: candidate!.id, attemptCount, recoveredUncertain };
+      }
+    }
+    return { status: 'empty', recoveredUncertain };
+  }
+
+  private validateApprovedDelivery(candidate: ProfessorCandidate | undefined, attempt: OutreachAttempt, attempts: OutreachAttempt[]): string | undefined {
+    if (!candidate) return 'candidate-missing';
+    const readiness = candidateReadinessIssue(candidate);
+    if (readiness) return `candidate-not-approved:${readiness.replace(/\s+/g, '-')}`;
+    if (!candidate.approvedAt || !candidate.approvedDraftHash || !candidate.personalizedDraft) return 'draft-approval-record-missing';
+    let parsed: unknown;
+    try { parsed = JSON.parse(candidate.personalizedDraft) as unknown; }
+    catch { return 'approved-draft-invalid'; }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'approved-draft-invalid';
+    const draft = parsed as OutreachDraft;
+    if (['candidateId', 'recipientEmail', 'subject', 'body', 'personalizationSourceUrl', 'personalizationExcerpt', 'generatedAt']
+      .some((field) => typeof (draft as unknown as Record<string, unknown>)[field] !== 'string')) return 'approved-draft-invalid';
+    if (draftFingerprint(draft) !== candidate.approvedDraftHash) return 'approved-draft-changed';
+    if (draft.candidateId !== candidate.id || draft.recipientEmail.trim().toLowerCase() !== attempt.recipientEmail.trim().toLowerCase()) return 'approved-draft-recipient-mismatch';
+    if (candidate.officialEmail?.trim().toLowerCase() !== attempt.recipientEmail.trim().toLowerCase()) return 'approved-contact-mismatch';
+    const evidence = candidate.discoveryEvidence ?? [];
+    if (!evidence.some((item) => item.kind === 'professor-profile' && item.verification === 'reviewed' && item.sourceUrl === draft.personalizationSourceUrl && item.excerpt.includes(draft.personalizationExcerpt))) return 'approved-profile-evidence-missing';
+    if (!candidate.emailSourceUrl || !evidence.some((item) => item.kind === 'contact' && item.verification === 'reviewed' && item.sourceUrl === candidate.emailSourceUrl)) return 'approved-contact-evidence-missing';
+    if (!candidate.programUrl || !evidence.some((item) => item.kind === 'program' && item.verification === 'reviewed' && item.sourceUrl === candidate.programUrl)) return 'approved-program-evidence-missing';
+    if (!candidate.fitSummary?.includes(draft.personalizationExcerpt) || !candidate.fitSummary.includes(draft.personalizationSourceUrl)) return 'approved-fit-note-mismatch';
+    const attemptId = `${attempt.candidateId}:${new Date(attempt.scheduledFor).toISOString()}`;
+    const prior = attempts.filter((item) => `${item.candidateId}:${new Date(item.scheduledFor).toISOString()}` !== attemptId);
+    const draftIssues = validateOutreachDraft(draft, prior);
+    if (draftIssues.length) return `approved-draft-review-invalid:${draftIssues[0]!.replace(/\s+/g, '-')}`;
+    return undefined;
   }
 }

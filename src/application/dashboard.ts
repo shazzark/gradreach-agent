@@ -29,7 +29,7 @@ export function buildDashboardSnapshot(input: {
 }): DashboardSnapshot {
   const plan = planDailyOutreach({ control: input.control, candidates: input.candidates, attempts: input.attempts, now: input.now });
   const dateAttempts = input.attempts.filter((attempt) => attempt.state !== 'cancelled' &&
-    getLocalDateKey(attempt.scheduledFor, input.control.timeZone) === plan.selection.dateKey);
+    getLocalDateKey(attempt.state === 'sent' ? attempt.sentAt ?? attempt.scheduledFor : attempt.scheduledFor, input.control.timeZone) === plan.selection.dateKey);
   return {
     targetPoolSize: input.targetPoolSize ?? 200,
     candidates: input.candidates.length,

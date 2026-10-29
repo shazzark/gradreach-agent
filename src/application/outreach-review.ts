@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { candidateReadinessIssue, type OutreachAttempt, type ProfessorCandidate } from '../domain/outreach-queue.ts';
 import { validateOutreachDraft, type OutreachDraft } from './outreach-draft.ts';
 
@@ -12,8 +13,15 @@ function parseSavedDraft(value: string): OutreachDraft {
   return draft as unknown as OutreachDraft;
 }
 
+/** Stable approval fingerprint prevents sending a draft changed after human review. */
+export function draftFingerprint(draft: OutreachDraft): string {
+  const approvedFields = [draft.candidateId, draft.recipientEmail.trim().toLowerCase(), draft.subject, draft.body,
+    draft.personalizationSourceUrl, draft.personalizationExcerpt, draft.generatedAt];
+  return createHash('sha256').update(JSON.stringify(approvedFields)).digest('hex');
+}
+
 /** Applies the final human approval state after reviewed sources and a personalized draft exist. */
-export function approveCandidateForQueue(candidate: ProfessorCandidate, attempts: OutreachAttempt[]): ProfessorCandidate {
+export function approveCandidateForQueue(candidate: ProfessorCandidate, attempts: OutreachAttempt[], approvedAt = new Date().toISOString()): ProfessorCandidate {
   if (candidate.status !== 'ready-for-review' || candidate.approvedForSending) {
     throw new Error('Candidate must be in ready-for-review state before approval');
   }
@@ -42,5 +50,6 @@ export function approveCandidateForQueue(candidate: ProfessorCandidate, attempts
       !approved.fitSummary?.includes(draft.personalizationExcerpt) || !approved.fitSummary.includes(approved.officialProfileUrl)) {
     throw new Error('Fit note and draft personalization must use the reviewed professor-profile evidence');
   }
-  return approved;
+  if (Number.isNaN(new Date(approvedAt).getTime())) throw new Error('approvedAt must be a valid date');
+  return { ...approved, approvedDraftHash: draftFingerprint(draft), approvedAt: new Date(approvedAt).toISOString() };
 }

@@ -26,6 +26,15 @@ test('builds queue and research progress using the configured local day and paus
   assert.deepEqual(snapshot.proposedCandidateIds, ['p1']);
 });
 
+test('counts delivered messages by sent time rather than their planned queue date', () => {
+  const snapshot = buildDashboardSnapshot({
+    candidates: [], programs: [], assessments: [],
+    attempts: [{ candidateId: 'p1', recipientEmail: 'p1@example.edu', scheduledFor: '2026-10-19T23:00:00.000Z', state: 'sent', sentAt: '2026-10-20T01:00:00.000Z' }],
+    control: { paused: true, timeZone: 'Africa/Lagos', dailyLimit: 5 }, now: '2026-10-20T02:00:00.000Z',
+  });
+  assert.equal(snapshot.sentToday, 1);
+});
+
 test('CSV export escapes quotes and protects spreadsheet formula cells', () => {
   const candidate = { ...reviewedCandidate, name: '=HYPERLINK("https://bad.example")' };
   const csv = candidatesToCsv([candidate]);
