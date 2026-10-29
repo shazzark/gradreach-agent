@@ -17,7 +17,7 @@ The applicant profile, credentials, grades, English-test status, funding needs, 
 | 4 | Conservative program assessment for classification/GPA, English, tuition, funding, intake, and deadlines. | Facts require reviewed dated HTTPS evidence; unsupported or ambiguous claims remain unclear; isolated MongoDB integration passes. | IN PROGRESS (local tests pass; MongoDB integration not run) |
 | 5 | Research-fit and personalized draft generation using reviewed evidence and applicant inputs. | Template and Gemini adapters are fixture-tested; draft validation requires exact reviewed excerpt/source and duplicate checks; human approval remains required. | COMPLETE (deterministic and mocked-provider tests pass; live Gemini smoke request failed at network access) |
 | 6 | Gmail OAuth/send adapter and safe daily outreach operation. | OAuth state/PKCE, send-only scope, restricted token file, default-disabled sender, daily cap, audit, pause, retry, and reply/follow-up behavior are verified. | IN PROGRESS (OAuth and adapter fixture-tested; no account authorized; no scheduler delivery/retry/reply workflow) |
-| 7 | Local dashboard, 200-contact progress, review queue, export, and end-to-end use. | Dashboard supports candidate/program review and capped queue preparation; configured app flow is verified against isolated MongoDB. | IN PROGRESS (dashboard and CSV fixtures pass; MongoDB end-to-end not run) |
+| 7 | Local dashboard, 200-contact discovery target, review queue, export, and end-to-end use. | Discovery deduplicates canonical results and stops saving/searching when the configured pool reaches 200; dashboard progress and CSV behavior pass fixtures; configured app flow is verified against isolated MongoDB. | IN PROGRESS (200-target and dashboard fixtures pass; MongoDB end-to-end not run) |
 
 ## Implemented behavior and boundaries
 
@@ -39,7 +39,7 @@ OAuth tokens can be obtained locally, but the Gmail sender is fail-closed even i
 
 ### Local interface
 
-Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, capped queue-record preparation, reviewed program import, discovery evidence review, draft approval, and formula-safe CSV export. The 200 target is displayed as progress metadata; it does not yet enforce a 200-candidate discovery stopping rule. Running the application end to end requires a private profile and MongoDB configuration.
+Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, capped queue-record preparation, reviewed program import, discovery evidence review, draft approval, and formula-safe CSV export. Discovery counts existing unique candidate IDs, excludes canonical source-URL duplicates, and stops immediately after reaching the configured target (capped at 200); the default target is 200. The dashboard shows the resulting progress. Running the application end to end requires a private profile and MongoDB configuration; that live flow remains unverified.
 
 ## Environment variables
 

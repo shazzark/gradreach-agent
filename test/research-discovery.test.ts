@@ -31,7 +31,7 @@ test('discovery searches every configured region and persists official-host resu
         ];
       },
     },
-    repository: { async save(candidate) { saved.push(candidate); } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
     options: {
       officialHostsByRegion: { 'Country A': ['www.countrya.edu'], 'Country B': ['www.countryb.ac.uk'] },
       countryCodesByRegion: { 'Country A': 'AA', 'Country B': 'BB' },
@@ -59,7 +59,7 @@ test('discovery refuses to silently skip a configured region without reviewed of
   await assert.rejects(discoverProfessorCandidates({
     profile,
     provider: { async search() { return []; } },
-    repository: { async save() {} },
+    repository: { async list() { return []; }, async save() {} },
     options: { officialHostsByRegion: { 'Country A': ['www.countrya.edu'] } },
   }), /No reviewed official institution hosts configured for region: Country B/);
 });
@@ -69,7 +69,7 @@ test('discovery rejects broad public-suffix allowlists before searching', async 
   await assert.rejects(discoverProfessorCandidates({
     profile,
     provider: { async search() { searches += 1; return []; } },
-    repository: { async save() {} },
+    repository: { async list() { return []; }, async save() {} },
     options: { officialHostsByRegion: { 'Country A': ['co.uk'], 'Country B': ['www.countryb.ac.uk'] } },
   }), /Invalid or overly broad official host: co\.uk/);
   assert.equal(searches, 0);
@@ -123,7 +123,7 @@ test('official URL normalization, deduplication and fetched evidence stay unveri
       { title: 'Professor search result', url: 'https://university.example.edu/person?utm_source=search#bio', excerpt: 'Search excerpt.' },
       { title: 'Duplicate URL variant', url: 'https://university.example.edu/person#other', excerpt: 'Duplicate excerpt.' },
     ]; } },
-    repository: { async save(candidate) { saved.push(candidate); } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
     options: {
       officialHostsByRegion: { 'Country A': ['university.example.edu'], 'Country B': ['university.example.edu'] },
       fetchPage: async (url) => ({ url, html: pages.get(url) ?? '' }),
@@ -148,4 +148,58 @@ test('official URL normalization, deduplication and fetched evidence stay unveri
   assert.ok(candidate.discoveryEvidence?.every((item) => item.verification === 'reviewed'));
   assert.ok(candidate.discoveryEvidence?.some((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl));
   assert.equal(candidate.approvedForSending, false);
+});
+
+test('discovery stops exactly at the configured candidate target and skips canonical duplicates', async () => {
+  const saved: ProfessorCandidate[] = [];
+  let searches = 0;
+  const result = await discoverProfessorCandidates({
+    profile,
+    provider: { async search() {
+      searches += 1;
+      return [
+        { title: 'Duplicate', url: 'https://university.example.edu/existing?utm_source=search', excerpt: 'Duplicate result.' },
+        { title: 'New candidate', url: 'https://university.example.edu/new', excerpt: 'New result.' },
+        { title: 'Must not be added', url: 'https://university.example.edu/extra', excerpt: 'Extra result.' },
+      ];
+    } },
+    repository: { async list() { return [{
+      id: 'existing', name: 'Existing', institution: 'Example', country: 'Country A', status: 'needs-evidence', approvedForSending: false, priority: 0,
+      discoveryEvidence: [{ kind: 'search-result', sourceUrl: 'https://university.example.edu/existing', excerpt: 'Existing.', retrievedAt: '2026-10-19T12:00:00.000Z', verification: 'unverified', region: 'Country A', query: 'old' }],
+    }]; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      targetPoolSize: 2,
+      officialHostsByRegion: { 'Country A': ['university.example.edu'], 'Country B': ['university.example.edu'] },
+      fetchPage: async (url) => ({ url, html: '<p>Synthetic official page</p>' }),
+    },
+  });
+  assert.equal(searches, 1);
+  assert.equal(result.searches, 1);
+  assert.equal(result.saved, 1);
+  assert.equal(result.poolSize, 2);
+  assert.equal(result.targetReached, true);
+  assert.equal(saved[0]?.name, 'New candidate');
+  assert.ok(!saved.some((candidate) => candidate.name === 'Must not be added'));
+});
+
+test('discovery does no search when the existing pool already meets the 200-candidate target', async () => {
+  let searches = 0;
+  const existing = Array.from({ length: 200 }, (_, index) => ({
+    id: `existing-${index}`, name: `Candidate ${index}`, institution: 'Example', country: 'Country A', status: 'needs-evidence' as const, approvedForSending: false, priority: 0,
+  }));
+  const result = await discoverProfessorCandidates({
+    profile,
+    provider: { async search() { searches += 1; return []; } },
+    repository: { async list() { return existing; }, async save() { assert.fail('must not save beyond the target'); } },
+    options: { officialHostsByRegion: {}, targetPoolSize: 200 },
+  });
+  assert.equal(searches, 0);
+  assert.deepEqual(result, { searches: 0, saved: 0, rejected: 0, poolSize: 200, targetReached: true });
+});
+
+test('discovery target must be from one through 200', async () => {
+  await assert.rejects(discoverProfessorCandidates({
+    profile, provider: { async search() { return []; } }, repository: { async list() { return []; }, async save() {} },
+    options: { officialHostsByRegion: {}, targetPoolSize: 201 },
+  }), /targetPoolSize must be an integer from 1 to 200/);
 });

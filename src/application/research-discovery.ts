@@ -12,6 +12,7 @@ const PUBLIC_SUFFIXES = new Set([
 ]);
 
 export interface CandidateDiscoveryRepository {
+  list(): Promise<ProfessorCandidate[]>;
   save(candidate: ProfessorCandidate): Promise<void>;
 }
 
@@ -20,6 +21,7 @@ export interface DiscoveryOptions {
   officialHostsByRegion: Record<string, string[]>;
   countryCodesByRegion?: Record<string, string>;
   resultsPerQuery?: number;
+  targetPoolSize?: number;
   now?: () => Date;
   fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
 }
@@ -198,7 +200,20 @@ export async function discoverProfessorCandidates(input: {
   provider: SearchProvider;
   repository: CandidateDiscoveryRepository;
   options: DiscoveryOptions;
-}): Promise<{ searches: number; saved: number; rejected: number }> {
+}): Promise<{ searches: number; saved: number; rejected: number; poolSize: number; targetReached: boolean }> {
+  const targetPoolSize = input.options.targetPoolSize ?? 200;
+  if (!Number.isInteger(targetPoolSize) || targetPoolSize < 1 || targetPoolSize > 200) {
+    throw new Error('targetPoolSize must be an integer from 1 to 200');
+  }
+  const existingCandidates = await input.repository.list();
+  const knownIds = new Set(existingCandidates.map((candidate) => candidate.id));
+  const knownUrls = new Set(existingCandidates.flatMap((candidate) => (candidate.discoveryEvidence ?? [])
+    .filter((item) => item.kind === 'search-result')
+    .map((item) => canonicalizeSourceUrl(item.sourceUrl))));
+  let poolSize = knownIds.size;
+  if (poolSize >= targetPoolSize) {
+    return { searches: 0, saved: 0, rejected: 0, poolSize, targetReached: true };
+  }
   const regions = [...new Set(input.profile.applicant.target.countries.map((country) => country.trim()).filter(Boolean))];
   if (regions.length === 0) throw new Error('At least one configured target country is required for discovery');
   const interests = [...new Set([...input.profile.applicant.target.fields, ...input.profile.applicant.target.researchInterests]
@@ -208,8 +223,8 @@ export async function discoverProfessorCandidates(input: {
   let searches = 0;
   let saved = 0;
   let rejected = 0;
-  const seenUrls = new Set<string>();
-  for (const region of regions) {
+  const seenUrls = new Set<string>(knownUrls);
+  discovery: for (const region of regions) {
     const configuredHosts = input.options.officialHostsByRegion[region];
     if (!configuredHosts?.length) throw new Error(`No reviewed official institution hosts configured for region: ${region}`);
     const hosts = [...new Set(configuredHosts.map(normalizeHost))];
@@ -231,12 +246,16 @@ export async function discoverProfessorCandidates(input: {
           if (seenUrls.has(canonicalUrl)) continue;
           seenUrls.add(canonicalUrl);
           const candidate = candidateFor(result, canonicalUrl, region, query, retrievedAt);
+          if (knownIds.has(candidate.id)) continue;
           await enrichOfficialCandidate(candidate, hosts, input.options);
           await input.repository.save(candidate);
+          knownIds.add(candidate.id);
+          poolSize += 1;
           saved += 1;
+          if (poolSize >= targetPoolSize) break discovery;
         }
       }
     }
   }
-  return { searches, saved, rejected };
+  return { searches, saved, rejected, poolSize, targetReached: poolSize >= targetPoolSize };
 }
