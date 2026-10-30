@@ -12,6 +12,7 @@
     "test:mongodb": "node --experimental-strip-types --test test/mongo-storage.integration.test.ts",
     "test:watch": "node --experimental-strip-types --test --watch",
     "app": "node --experimental-strip-types src/interfaces/terminal-app.ts",
+    "leads:view": "node --experimental-strip-types src/interfaces/view-undecided-professor-leads.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",
     "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",

@@ -45,6 +45,8 @@ To run the dashboard, set `MONGODB_URI`, create the private profile, run `npm ru
 npm run app
 ```
 
+To view undecided professor leads without starting the dashboard, run `npm run leads:view`. This standalone command reads candidate and saved triage records only; it does not load or save the private profile, update scheduler state, or call a search, AI, or email provider.
+
 The terminal dashboard reviews evidence and drafts, imports reviewed program JSON, controls pause state, prepares capped queue records, records manual reply/follow-up statuses, and exports candidates to CSV. Discovery stops adding candidates at its configurable target (default 200, maximum 200).
 
 ## Gmail OAuth setup
