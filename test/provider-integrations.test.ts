@@ -77,3 +77,27 @@ test('Gemini adapter uses its configured key without logging it and parses gener
   assert.equal(result.subject, 'MSc research inquiry');
   assert.match(requestBody, /Do not send or approve anything/);
 });
+
+test('Gemini evidence triage reuses its configured key and sends only bounded evidence and criteria', async () => {
+  const apiKey = 'synthetic-triage-key';
+  let requestBody = '';
+  let requestUrl = '';
+  const provider = new GeminiDraftProvider({ apiKey, model: 'test-model', fetchImpl: async (input, init) => {
+    requestUrl = String(input);
+    assert.equal(new Headers(init?.headers).get('x-goog-api-key'), apiKey);
+    requestBody = String(init?.body);
+    return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ recommendations: [] }) }] } }] });
+  } });
+  const response = await provider.triageEvidence({
+    researchCriteria: ['network security', 'machine learning'],
+    leads: [{ leadNumber: 1, evidence: [{ sourceUrl: 'https://cs.kaist.ac.kr/research', excerpt: 'Research in secure networks.' }] }],
+  });
+  assert.deepEqual(response, { recommendations: [] });
+  assert.equal(requestUrl, 'https://generativelanguage.googleapis.com/v1beta/models/test-model:generateContent');
+  const request = JSON.parse(requestBody) as { generationConfig: { maxOutputTokens: number }; contents: Array<{ parts: Array<{ text: string }> }> };
+  assert.equal(request.generationConfig.maxOutputTokens, 4096);
+  assert.match(request.contents[0]!.parts[0]!.text, /network security/);
+  assert.match(request.contents[0]!.parts[0]!.text, /Research in secure networks\./);
+  assert.doesNotMatch(request.contents[0]!.parts[0]!.text, /applicant name|transcript|CV|email address/i);
+  assert.equal(requestBody.includes(apiKey), false);
+});

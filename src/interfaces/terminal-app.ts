@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { buildDashboardSnapshot, candidatesToCsv } from '../application/dashboard.ts';
 import { planDailyOutreach } from '../application/daily-outreach-planner.ts';
+import { triageCandidateEvidence } from '../application/evidence-triage.ts';
 import { createGeminiOutreachDraft, createOutreachDraft } from '../application/outreach-draft.ts';
 import { approveCandidateForQueue } from '../application/outreach-review.ts';
 import { parseApplicantProfile } from '../domain/applicant-profile.ts';
@@ -13,6 +14,8 @@ import { assessProgram, parseProgramRecord } from '../domain/program-assessment.
 import type { ProfessorCandidate } from '../domain/outreach-queue.ts';
 import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { loadApplicantProfile } from '../infrastructure/local-profile.ts';
+import { GeminiDraftProvider } from '../infrastructure/gemini-draft-provider.ts';
+import { OFFICIAL_HOSTS_BY_REGION } from '../config/official-host-allowlist.ts';
 
 const PROFILE_ID = 'primary';
 
@@ -46,7 +49,7 @@ async function run(): Promise<void> {
     const ask = (prompt: string) => readline.question(prompt);
 
     for (;;) {
-      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status  0 Exit\n');
+      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status\n14 Triage official evidence with Gemini  0 Exit\n');
       const choice = (await ask('Choose an option: ')).trim();
       if (choice === '0') break;
 
@@ -216,6 +219,24 @@ async function run(): Promise<void> {
           ...(followUpScheduledFor ? { followUpScheduledFor } : {}),
         });
         stdout.write(recorded ? 'Manual response/follow-up status saved. Message contents were not stored.\n' : 'No sent outreach was found for that candidate.\n');
+      } else if (choice === '14') {
+        const candidates = await repositories.candidates.list();
+        const researchCriteria = [...new Set([
+          ...profile.applicant.target.fields,
+          ...profile.applicant.target.researchInterests,
+        ].map((item) => item.trim()).filter(Boolean))];
+        const results = await triageCandidateEvidence({
+          candidates,
+          researchCriteria,
+          officialHostsByRegion: OFFICIAL_HOSTS_BY_REGION,
+          provider: new GeminiDraftProvider(),
+          repository: repositories.evidenceTriage,
+        });
+        stdout.write(`Saved ${results.length} source-validated AI triage records separately from candidate review state.\n`);
+        for (const result of results) {
+          stdout.write(`${terminalText(result.candidateId)} | ${result.recommendation}\n`);
+          for (const fact of result.facts) stdout.write(`  ${terminalText(fact.sourceUrl)}\n  "${terminalText(fact.quote)}"\n`);
+        }
       } else {
         stdout.write('Unknown option.\n');
       }

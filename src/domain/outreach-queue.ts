@@ -41,6 +41,21 @@ export interface DiscoveryEvidence {
   query: string;
 }
 
+export type EvidenceTriageRecommendation = 'likely relevant' | 'uncertain' | 'unlikely';
+
+export interface EvidenceTriageFact {
+  sourceUrl: string;
+  quote: string;
+}
+
+/** Stored separately from ProfessorCandidate so triage never changes review or send state. */
+export interface CandidateEvidenceTriage {
+  candidateId: string;
+  recommendation: EvidenceTriageRecommendation;
+  facts: EvidenceTriageFact[];
+  triagedAt: string;
+}
+
 export interface OutreachAttempt {
   candidateId: string;
   recipientEmail: string;

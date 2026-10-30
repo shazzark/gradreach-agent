@@ -2,7 +2,7 @@ import './local-env.ts';
 import { MongoClient } from 'mongodb';
 import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
-import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
+import type { CandidateEvidenceTriage, OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../domain/program-assessment.ts';
 import { getLocalDateKey } from '../domain/outreach-queue.ts';
 
@@ -16,6 +16,12 @@ interface StoredCandidate extends Document {
   _id: string;
   candidate: ProfessorCandidate;
   normalizedEmail?: string;
+  updatedAt: Date;
+}
+
+interface StoredCandidateTriage extends Document {
+  _id: string;
+  triage: CandidateEvidenceTriage;
   updatedAt: Date;
 }
 
@@ -109,6 +115,31 @@ export class ProfessorCandidateRepository {
       { $set: { 'candidate.status': 'sent', 'candidate.approvedForSending': false, updatedAt: new Date() } },
     );
     return result.modifiedCount === 1;
+  }
+}
+
+export class CandidateEvidenceTriageRepository {
+  private readonly collection: Collection<StoredCandidateTriage>;
+
+  constructor(collection: Collection<StoredCandidateTriage>) {
+    this.collection = collection;
+  }
+
+  async get(candidateId: string): Promise<CandidateEvidenceTriage | undefined> {
+    return (await this.collection.findOne({ _id: candidateId }))?.triage;
+  }
+
+  async list(): Promise<CandidateEvidenceTriage[]> {
+    const records = await this.collection.find().sort({ 'triage.triagedAt': -1 }).toArray();
+    return records.map((record) => record.triage);
+  }
+
+  async save(triage: CandidateEvidenceTriage): Promise<void> {
+    await this.collection.replaceOne(
+      { _id: triage.candidateId },
+      { _id: triage.candidateId, triage, updatedAt: new Date() },
+      { upsert: true },
+    );
   }
 }
 
@@ -334,6 +365,7 @@ export class SchedulerControlRepository {
 export interface GradReachRepositories {
   profiles: ApplicantProfileRepository;
   candidates: ProfessorCandidateRepository;
+  evidenceTriage: CandidateEvidenceTriageRepository;
   attempts: OutreachAttemptRepository;
   programs: ProgramRepository;
   assessments: ProgramAssessmentRepository;
@@ -345,6 +377,7 @@ export function createRepositories(db: Db): GradReachRepositories {
   return {
     profiles: new ApplicantProfileRepository(db.collection<StoredProfile>('applicant_profiles')),
     candidates: new ProfessorCandidateRepository(db.collection<StoredCandidate>('professor_candidates')),
+    evidenceTriage: new CandidateEvidenceTriageRepository(db.collection<StoredCandidateTriage>('candidate_evidence_triage')),
     attempts: new OutreachAttemptRepository(db.collection<StoredAttempt>('outreach_attempts')),
     programs: new ProgramRepository(db.collection<StoredProgram>('programs')),
     assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
