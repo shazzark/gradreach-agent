@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { DiscoveryEvidence, ProfessorCandidate } from '../domain/outreach-queue.ts';
 import type { SearchProvider, SearchResult } from '../infrastructure/brave-search-provider.ts';
+import { failureForHttpStatus, sanitizedIntegrationError, SanitizedIntegrationError } from '../infrastructure/sanitized-failure.ts';
 
 const PUBLIC_SUFFIXES = new Set([
   'com', 'edu', 'gov', 'mil', 'net', 'org',
@@ -32,7 +33,7 @@ function normalizeHost(value: string): string {
   if (!host || host.includes('/') || host.includes(':') || host.includes('@') ||
       labels.length < 2 || labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)) ||
       PUBLIC_SUFFIXES.has(host)) {
-    throw new Error(`Invalid or overly broad official host: ${value}`);
+    throw new SanitizedIntegrationError('disallowed_host');
   }
   return host;
 }
@@ -58,7 +59,7 @@ function canonicalizeSourceUrl(value: string): string {
   return url.toString();
 }
 
-function extractPageExcerpt(html: string): string {
+export function extractOfficialPageExcerpt(html: string): string {
   return html
     .replace(/<!--([\s\S]*?)-->/g, ' ')
     .replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
@@ -76,7 +77,7 @@ function extractPageExcerpt(html: string): string {
 }
 
 function queryFor(region: string, interest: string, host: string): string {
-  return `site:${host} professor ${interest} MSc ${region}`.slice(0, 600);
+  return `site:${host} faculty professor supervisor lab laboratory research group ${interest} MSc ${region}`.slice(0, 600);
 }
 
 function candidateFor(result: SearchResult, sourceUrl: string, region: string, query: string, retrievedAt: string): ProfessorCandidate {
@@ -113,7 +114,7 @@ function linksFromHtml(html: string, baseUrl: string, hosts: string[]): Array<{ 
     try {
       const url = canonicalizeSourceUrl(new URL(href, baseUrl).toString());
       if (isAllowedOfficialUrl(url, hosts)) {
-        links.push({ url, text: extractPageExcerpt(match[3] ?? '') });
+        links.push({ url, text: extractOfficialPageExcerpt(match[3] ?? '') });
       }
     } catch { /* Ignore malformed links. */ }
   }
@@ -130,28 +131,55 @@ function linkKind(link: { url: string; text: string }): 'program' | 'contact' | 
 /** Fetches one official page with redirect and final-host checks; never returns page instructions as trusted data. */
 export async function fetchOfficialPage(url: string, allowedHosts: string[], fetchImpl: typeof fetch = fetch): Promise<{ url: string; html: string }> {
   const hosts = [...new Set(allowedHosts.map(normalizeHost))];
-  if (!isAllowedOfficialUrl(url, hosts)) throw new Error('Official page URL is outside the reviewed HTTPS host allowlist');
-  const response = await fetchImpl(url, { redirect: 'manual', headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(15_000) });
-  if (response.status >= 300 && response.status < 400) throw new Error('Official page redirects are not followed during discovery');
-  if (!response.ok) throw new Error(`Official page request failed with HTTP ${response.status}`);
+  if (!isAllowedOfficialUrl(url, hosts)) throw new SanitizedIntegrationError('disallowed_host');
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { redirect: 'manual', headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(15_000) });
+  } catch (error) {
+    throw sanitizedIntegrationError(error, url);
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new SanitizedIntegrationError('rejected_redirect', { statusCode: response.status, resourceUrl: url });
+  }
+  if (!response.ok) throw failureForHttpStatus(response.status, url);
   const finalUrl = response.url || url;
-  if (!isAllowedOfficialUrl(finalUrl, hosts)) throw new Error('Official page response resolved outside the reviewed HTTPS host allowlist');
+  if (!isAllowedOfficialUrl(finalUrl, hosts)) throw new SanitizedIntegrationError('disallowed_host', { resourceUrl: url });
   const contentType = response.headers.get('content-type') ?? '';
-  if (contentType && !contentType.toLowerCase().includes('text/html')) throw new Error('Official page response is not HTML');
-  const html = await response.text();
+  if (contentType && !contentType.toLowerCase().includes('text/html')) {
+    throw new SanitizedIntegrationError('invalid_content', { resourceUrl: url });
+  }
+  let html: string;
+  try {
+    html = await response.text();
+  } catch (error) {
+    throw sanitizedIntegrationError(error, url);
+  }
+  if (!html.trim()) throw new SanitizedIntegrationError('invalid_content', { resourceUrl: url });
   return { url: canonicalizeSourceUrl(finalUrl), html: html.slice(0, 2_000_000) };
 }
 
 /** Fetches the search result and its first same-host program/contact links, storing all evidence unverified. */
 export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now'>): Promise<ProfessorCandidate> {
   const fetchPage = options.fetchPage ?? ((url: string) => fetchOfficialPage(url, hosts));
+  const loadPage = async (url: string) => {
+    let page: { url: string; html: string };
+    try {
+      page = await fetchPage(url);
+    } catch (error) {
+      throw sanitizedIntegrationError(error, url);
+    }
+    if (!isAllowedOfficialUrl(page.url, hosts)) {
+      throw new SanitizedIntegrationError('disallowed_host', { resourceUrl: url });
+    }
+    return page;
+  };
   const evidence = [...(candidate.discoveryEvidence ?? [])];
   const retrievedAt = () => (options.now?.() ?? new Date()).toISOString();
   const resultUrl = evidence.find((item) => item.kind === 'search-result')?.sourceUrl;
   if (!resultUrl) return candidate;
-  const page = await fetchPage(resultUrl);
+  const page = await loadPage(resultUrl);
   const profileRetrievedAt = retrievedAt();
-  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: extractPageExcerpt(page.html), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
+  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: extractOfficialPageExcerpt(page.html), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
   const chosen = new Map<'program' | 'contact', string>();
   for (const link of linksFromHtml(page.html, page.url, hosts)) {
     const kind = linkKind(link);
@@ -160,9 +188,9 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
   for (const kind of ['program', 'contact'] as const) {
     const url = chosen.get(kind);
     if (!url) continue;
-    const linkedPage = await fetchPage(url);
+    const linkedPage = await loadPage(url);
     const sourceUrl = linkedPage.url;
-    evidence.push({ kind, sourceUrl, excerpt: extractPageExcerpt(linkedPage.html), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
+    evidence.push({ kind, sourceUrl, excerpt: extractOfficialPageExcerpt(linkedPage.html), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
     if (kind === 'program') candidate.programUrl = sourceUrl;
     else candidate.officialContactUrl = sourceUrl;
   }

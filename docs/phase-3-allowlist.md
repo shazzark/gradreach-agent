@@ -16,6 +16,12 @@ Search findings are stored locally under the ignored `outputs/` directory. They 
 
 ## Bounded Brave pilot
 
-On 2026-10-30, one Brave request with a maximum of three results was made for each remaining profile region, using an exact-host `site:` query. Five requests succeeded and produced 12 exact-host leads across Australia, China, Europe, Portugal, and Italy. The initial Thailand request and its single retry failed; the retry used the same three-result limit, and its failure detail was not retained. The response data is saved in the ignored `outputs/phase3-search-pilot.json`.
+On 2026-10-30, one Brave request with a maximum of three results was made for each remaining profile region, using an exact-host `site:` query. Five requests succeeded and produced 12 exact-host leads. The initial Thailand request and its first retry failed without retained failure details. The latest retry used the same three-result limit and returned sanitized HTTP 422. The response data is saved in the ignored `outputs/phase3-search-pilot.json`.
 
 The existing safe page-fetch workflow processed the 12 saved leads sequentially. It captured exact-host official-page excerpts with retrieval timestamps for nine leads and copied 42 relevant literal sentence snippets, each with the source URL, retrieval time, and full supporting excerpt. Three page fetches failed (two China, one Italy), leaving only their search-result evidence; page-fetch failure details were not retained. The Thailand retry failed with its three-result cap unchanged; the retry failure detail was not retained. Captured excerpts did not explicitly support a professor name or email address, so none was extracted. All evidence remains `unverified`, leads remain `needs-evidence`, and `approvedForSending` remains false. No candidate was approved and no email was sent.
+
+## Sanitized failure reporting and bounded retries
+
+Search terms now include faculty, professor, supervisor, lab, laboratory, and research-group wording. The latest Thailand retry kept the three-result limit and returned sanitized `http_status` / HTTP 422. The three previously failed lead-page URLs were retried once each: both China pages succeeded; the Italy page at `https://www.polimi.it/formazione/formazione-oltre-la-laurea/master-universitari-e-corsi-post-laurea/dettaglio-master/3201` returned sanitized `http_status` / HTTP 404. The failed-page retry excerpts added 11 literal relevant snippets with source URLs and retrieval times.
+
+Failure records contain only a safe category, fixed message, HTTP status when present, and a query-free HTTPS resource path when applicable. They exclude raw exception text, API keys, response bodies, and search queries. Results remain unverified and unapproved; no email was sent.
