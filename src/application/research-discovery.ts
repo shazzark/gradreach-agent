@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { DiscoveryEvidence, ProfessorCandidate } from '../domain/outreach-queue.ts';
 import { diagnosticResultHostname, type RejectedSearchResultChecks, type SearchProvider, type SearchResult } from '../infrastructure/brave-search-provider.ts';
+import type { Phase3ResultDiagnostic } from '../infrastructure/phase3-pilot-diagnostics.ts';
 import { failureForHttpStatus, safeFailureRecord, sanitizedIntegrationError, SanitizedIntegrationError, type SafeFailureRecord, type SafeResponseDiagnostics } from '../infrastructure/sanitized-failure.ts';
 
 const PUBLIC_SUFFIXES = new Set([
@@ -25,7 +26,8 @@ export interface DiscoveryOptions {
   targetPoolSize?: number;
   now?: () => Date;
   fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
-  onRejectedResult?: (checks: RejectedSearchResultChecks) => void;
+  onRejectedResult?: (checks: RejectedSearchResultChecks) => void | Promise<void>;
+  onResultDiagnostic?: (diagnostic: Phase3ResultDiagnostic) => void | Promise<void>;
   onOfficialPageFailure?: (failure: SafeFailureRecord) => void;
 }
 
@@ -59,6 +61,10 @@ function canonicalizeSourceUrl(value: string): string {
   }
   url.searchParams.sort();
   return url.toString();
+}
+
+function hasPdfSignature(content: string): boolean {
+  return content.slice(0, 1024).includes('%PDF-');
 }
 
 export function extractOfficialPageExcerpt(html: string): string {
@@ -163,6 +169,14 @@ export async function fetchOfficialPage(url: string, allowedHosts: string[], fet
     throw sanitizedIntegrationError(error, url, responseDetails);
   }
   if (!html.trim()) throw new SanitizedIntegrationError('invalid_content', { ...responseDetails, bodyEmpty: true, resourceUrl: url });
+  if (hasPdfSignature(html)) {
+    throw new SanitizedIntegrationError('invalid_content', {
+      ...responseDetails,
+      contentTypeIsHtml: false,
+      bodyEmpty: false,
+      resourceUrl: url,
+    });
+  }
   return { url: canonicalizeSourceUrl(finalUrl), html: html.slice(0, 2_000_000) };
 }
 
@@ -271,10 +285,23 @@ export async function discoverProfessorCandidates(input: {
     for (const host of hosts) {
       for (const interest of interests) {
         const query = queryFor(region, interest, host);
+        const recordRejection = async (checks: RejectedSearchResultChecks) => {
+          await input.options.onRejectedResult?.(checks);
+          await input.options.onResultDiagnostic?.({
+            country: region,
+            hostname: checks.hostname,
+            outcome: 'rejected',
+            rejectionReasons: [
+              ...(checks.exactHost ? ['exact_host'] : []),
+              ...(checks.title ? ['title'] : []),
+              ...(checks.excerpt ? ['excerpt'] : []),
+            ],
+          });
+        };
         const results = await input.provider.search(query, {
           ...(input.options.countryCodesByRegion?.[region] ? { countryCode: input.options.countryCodesByRegion[region] } : {}),
           count: input.options.resultsPerQuery ?? 10,
-          ...(input.options.onRejectedResult ? { onRejectedResult: input.options.onRejectedResult } : {}),
+          ...(input.options.onRejectedResult || input.options.onResultDiagnostic ? { onRejectedResult: recordRejection } : {}),
         });
         searches += 1;
         const retrievedAt = (input.options.now?.() ?? new Date()).toISOString();
@@ -290,21 +317,36 @@ export async function discoverProfessorCandidates(input: {
             if (failedChecks.exactHost) rejectedByCheck.exactHost += 1;
             if (failedChecks.title) rejectedByCheck.title += 1;
             if (failedChecks.excerpt) rejectedByCheck.excerpt += 1;
-            input.options.onRejectedResult?.(failedChecks);
+            await recordRejection(failedChecks);
             continue;
           }
           const canonicalUrl = canonicalizeSourceUrl(result.url);
-          if (seenUrls.has(canonicalUrl)) continue;
+          if (seenUrls.has(canonicalUrl)) {
+            await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'duplicate', rejectionReasons: [] });
+            continue;
+          }
           seenUrls.add(canonicalUrl);
           const candidate = candidateFor(result, canonicalUrl, region, query, retrievedAt);
-          if (knownIds.has(candidate.id)) continue;
+          if (knownIds.has(candidate.id)) {
+            await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'duplicate', rejectionReasons: [] });
+            continue;
+          }
           try {
             await enrichOfficialCandidate(candidate, hosts, input.options);
           } catch (error) {
             // A bad or unavailable official page rejects this lead, but should not discard later results.
-            if (error instanceof SanitizedIntegrationError) continue;
+            if (error instanceof SanitizedIntegrationError) {
+              await input.options.onResultDiagnostic?.({
+                country: region,
+                hostname: failedChecks.hostname,
+                outcome: 'rejected',
+                rejectionReasons: [error.failure.kind],
+              });
+              continue;
+            }
             throw error;
           }
+          await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'page_validated', rejectionReasons: [] });
           await input.repository.save(candidate);
           knownIds.add(candidate.id);
           poolSize += 1;

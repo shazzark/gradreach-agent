@@ -27,7 +27,7 @@ export function diagnosticResultHostname(value: string): string | null {
 export interface SearchOptions {
   countryCode?: string;
   count?: number;
-  onRejectedResult?: (checks: RejectedSearchResultChecks) => void;
+  onRejectedResult?: (checks: RejectedSearchResultChecks) => void | Promise<void>;
 }
 
 export interface SearchProvider {
@@ -93,7 +93,8 @@ export class BraveSearchProvider implements SearchProvider {
     if (typeof web !== 'object' || web === null || !Array.isArray(web.results)) {
       throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
-    return web.results.flatMap((result) => {
+    const accepted: SearchResult[] = [];
+    for (const result of web.results) {
       const title = typeof result.title === 'string' ? result.title.trim() : '';
       const resultUrl = typeof result.url === 'string' ? result.url : '';
       const excerpt = typeof result.description === 'string' ? result.description.trim() : '';
@@ -105,10 +106,11 @@ export class BraveSearchProvider implements SearchProvider {
       }
       const checks = { exactHost, title: !title, excerpt: !excerpt, hostname: diagnosticResultHostname(resultUrl) };
       if (checks.exactHost || checks.title || checks.excerpt) {
-        options.onRejectedResult?.(checks);
-        return [];
+        await options.onRejectedResult?.(checks);
+        continue;
       }
-      return [{ title, url: resultUrl, excerpt }];
-    });
+      accepted.push({ title, url: resultUrl, excerpt });
+    }
+    return accepted;
   }
 }

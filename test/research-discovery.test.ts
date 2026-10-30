@@ -84,6 +84,7 @@ test('discovery counts failed result checks without retaining result content', a
   });
   const saved: ProfessorCandidate[] = [];
   const rejectionChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean; hostname: string | null }> = [];
+  const resultDiagnostics: Array<{ country: string; hostname: string | null; outcome: string; rejectionReasons: string[] }> = [];
   const result = await discoverProfessorCandidates({
     profile: singleCountryProfile,
     provider: { async search() { return [
@@ -97,7 +98,8 @@ test('discovery counts failed result checks without retaining result content', a
     options: {
       officialHostsByRegion: { 'Country A': ['university.example.edu'] },
       fetchPage: async (url) => ({ url, html: '<p>Official page</p>' }),
-      onRejectedResult: (checks) => rejectionChecks.push(checks),
+      onRejectedResult: (checks) => { rejectionChecks.push(checks); },
+      onResultDiagnostic: (diagnostic) => { resultDiagnostics.push(diagnostic); },
     },
   });
 
@@ -110,6 +112,13 @@ test('discovery counts failed result checks without retaining result content', a
     { hostname: 'university.example.edu', exactHost: false, title: true, excerpt: true },
     { hostname: 'university.example.edu', exactHost: false, title: false, excerpt: true },
     { hostname: 'university.example.edu', exactHost: false, title: true, excerpt: false },
+  ]);
+  assert.deepEqual(resultDiagnostics, [
+    { country: 'Country A', hostname: 'outside.example.edu', outcome: 'rejected', rejectionReasons: ['exact_host'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'rejected', rejectionReasons: ['title', 'excerpt'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'rejected', rejectionReasons: ['excerpt'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'rejected', rejectionReasons: ['title'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'page_validated', rejectionReasons: [] },
   ]);
   assert.equal(saved.length, 1);
   assert.equal(JSON.stringify(result.rejectedByCheck).includes('university.example.edu'), false);
@@ -155,7 +164,7 @@ test('Brave adapter authenticates, requests a bounded result count, and filters 
     ] } }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
   const results = await provider.search('synthetic query', {
-    countryCode: 'gb', count: 50, onRejectedResult: (checks) => rejectedChecks.push(checks),
+    countryCode: 'gb', count: 50, onRejectedResult: (checks) => { rejectedChecks.push(checks); },
   });
   const parsedUrl = new URL(requestUrl);
   assert.equal(parsedUrl.searchParams.get('count'), '20');
@@ -178,7 +187,7 @@ test('result hostname diagnostics omit URLs with embedded credentials and malfor
     { title: '', url: 'not a URL?query=private', description: 'private excerpt' },
   ] } }), { status: 200, headers: { 'content-type': 'application/json' } }));
   const diagnostics: Array<{ exactHost: boolean; title: boolean; excerpt: boolean; hostname: string | null }> = [];
-  await provider.search('private query', { onRejectedResult: (checks) => diagnostics.push(checks) });
+  await provider.search('private query', { onRejectedResult: (checks) => { diagnostics.push(checks); } });
   assert.deepEqual(diagnostics.map((item) => item.hostname), [null, null]);
   const serialized = JSON.stringify(diagnostics);
   for (const privateValue of ['password', 'secret', 'private excerpt', 'private query', '/person']) {
@@ -322,6 +331,20 @@ test('official page fetch validates exact HTTPS hosts and refuses redirects', as
   assert.equal(fetches, 1);
 });
 
+test('official page fetch rejects a PDF body even when its content type claims HTML', async () => {
+  const body = '%PDF-1.7 private-document-content';
+  await assert.rejects(fetchOfficialPage('https://university.example.edu/faculty', ['university.example.edu'], async () =>
+    new Response(body, { status: 200, headers: { 'content-type': 'text/html' } })), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.kind, 'invalid_content');
+    assert.equal(error.failure.statusCode, 200);
+    assert.equal(error.failure.contentTypeIsHtml, false);
+    assert.equal(error.failure.bodyEmpty, false);
+    assert.equal(JSON.stringify(error.failure).includes(body), false);
+    return true;
+  });
+});
+
 test('official page failures distinguish HTTP, rate limit, content, and network errors without leaking secrets', async () => {
   const secret = 'synthetic-page-secret';
   const url = `https://university.example.edu/people?token=${secret}`;
@@ -431,6 +454,7 @@ test('discovery skips a result whose official page is invalid and continues to l
   });
   const saved: ProfessorCandidate[] = [];
   const pageFailures: Array<{ kind: string; resourceHost: string | undefined; resourcePath: string | undefined }> = [];
+  const resultDiagnostics: Array<{ country: string; hostname: string | null; outcome: string; rejectionReasons: string[] }> = [];
   const result = await discoverProfessorCandidates({
     profile: singleCountryProfile,
     provider: { async search() { return [
@@ -453,6 +477,7 @@ test('discovery skips a result whose official page is invalid and continues to l
         resourceHost: failure.resourceHost,
         resourcePath: failure.resourcePath,
       }),
+      onResultDiagnostic: (diagnostic) => { resultDiagnostics.push(diagnostic); },
     },
   });
   assert.equal(result.searches, 1);
@@ -460,6 +485,10 @@ test('discovery skips a result whose official page is invalid and continues to l
   assert.deepEqual(saved.map((candidate) => candidate.name), ['HTML lead']);
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
   assert.deepEqual(pageFailures, [{ kind: 'invalid_content', resourceHost: 'university.example.edu', resourcePath: '/paper.pdf' }]);
+  assert.deepEqual(resultDiagnostics, [
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'rejected', rejectionReasons: ['invalid_content'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'page_validated', rejectionReasons: [] },
+  ]);
 });
 
 test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {
