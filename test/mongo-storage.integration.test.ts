@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { MongoClient } from 'mongodb';
 import type { Document } from 'mongodb';
@@ -11,6 +10,9 @@ import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-ass
 
 const mongoUri = process.env.MONGODB_TEST_URI;
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
+const testCollections = [
+  'applicant_profiles', 'professor_candidates', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',
+];
 
 function sampleCandidate(id: string, email: string): ProfessorCandidate {
   return {
@@ -37,12 +39,14 @@ function sampleAssessment(assessedAt: string): ProgramAssessment {
 test('Mongo profile, candidate, program, assessment and scheduler repositories preserve storage boundaries', {
   skip: !mongoUri ? 'Set MONGODB_TEST_URI to an isolated test deployment to run MongoDB integration checks' : false,
 }, async () => {
+  const uriDatabaseName = decodeURIComponent(new URL(mongoUri!).pathname.slice(1));
+  assert.equal(uriDatabaseName, 'gradreach_test', 'MONGODB_TEST_URI must target the gradreach_test database');
+
   const client = new MongoClient(mongoUri!);
-  const databaseName = `gradreach_test_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
   let db;
   try {
     await client.connect();
-    db = client.db(databaseName);
+    db = client.db('gradreach_test');
     await createPhase2Indexes(db);
     await createPhase4Indexes(db);
     const repositories = createRepositories(db);
@@ -124,7 +128,15 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.profiles.get('synthetic-profile'), undefined);
     assert.equal(await repositories.programs.delete(sampleProgram.id), true);
   } finally {
-    if (db) await db.dropDatabase();
+    if (db) {
+      for (const collectionName of testCollections) {
+        try {
+          await db.collection(collectionName).drop();
+        } catch (error) {
+          if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 26) throw error;
+        }
+      }
+    }
     await client.close();
   }
 });
