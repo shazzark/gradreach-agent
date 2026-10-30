@@ -20,6 +20,10 @@ npm run build
 
 Run `npm run test:mongodb` only after setting `MONGODB_TEST_URI` to a disposable test deployment. Each run creates a uniquely named test database and drops only that database. Never point it at personal or production data. `MONGODB_URI` configures the application; `MONGODB_DATABASE` optionally selects its database. `npm run db:indexes` creates indexes in the configured application database and should only be run after checking that target.
 
+## Discovery collection rename
+
+Discovery leads are stored in `discovery_leads`; their saved triage recommendations are stored in `lead_triage_recommendations`. After MongoDB connectivity is available, before using a database that still has `professor_candidates` or `candidate_evidence_triage`, take a verified backup, stop every GradReach app and scheduler instance, and confirm the effective database (`MONGODB_DATABASE` when set, otherwise the database in the URI). Then run `npm run db:migrate-discovery` using an account permitted to rename collections. The command renames collections in place with `dropTarget: false`, preserving documents, IDs, and indexes. It is safe to rerun after a partial migration. If both an old and replacement name already exist, it stops without overwriting or merging either collection. Afterward, verify the new collection counts and index names and confirm the old names are gone before restarting GradReach. Application storage and index creation refuse to proceed while legacy collection names remain; the application role must be able to list collection names for this startup guard.
+
 ## Private profile and environment
 
 Copy `private.profile.example.json` to the ignored `private.profile.json` and enter verified details. Set `GRADREACH_PROFILE_PATH` to use another private profile path. Unknown grades, eligibility, English-test status, funding, and source facts should remain unknown until verified. Program JSON format and source requirements are in [docs/program-record-format.md](docs/program-record-format.md).

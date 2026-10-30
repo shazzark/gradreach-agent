@@ -5,6 +5,7 @@ import { parseApplicantProfile, type ApplicantProfile } from '../domain/applican
 import type { CandidateEvidenceTriage, OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../domain/program-assessment.ts';
 import { getLocalDateKey } from '../domain/outreach-queue.ts';
+import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
 
 interface StoredProfile extends Document {
   _id: string;
@@ -376,8 +377,8 @@ export interface GradReachRepositories {
 export function createRepositories(db: Db): GradReachRepositories {
   return {
     profiles: new ApplicantProfileRepository(db.collection<StoredProfile>('applicant_profiles')),
-    candidates: new ProfessorCandidateRepository(db.collection<StoredCandidate>('professor_candidates')),
-    evidenceTriage: new CandidateEvidenceTriageRepository(db.collection<StoredCandidateTriage>('candidate_evidence_triage')),
+    candidates: new ProfessorCandidateRepository(db.collection<StoredCandidate>('discovery_leads')),
+    evidenceTriage: new CandidateEvidenceTriageRepository(db.collection<StoredCandidateTriage>('lead_triage_recommendations')),
     attempts: new OutreachAttemptRepository(db.collection<StoredAttempt>('outreach_attempts')),
     programs: new ProgramRepository(db.collection<StoredProgram>('programs')),
     assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
@@ -397,7 +398,8 @@ export async function createPhase4Indexes(db: Db): Promise<void> {
 
 /** Run as an explicit deployment step after reviewing the target database. */
 export async function createPhase2Indexes(db: Db): Promise<void> {
-  await db.collection<StoredCandidate>('professor_candidates').createIndex(
+  await assertDiscoveryCollectionsMigrated(db);
+  await db.collection<StoredCandidate>('discovery_leads').createIndex(
     { normalizedEmail: 1 },
     { name: 'unique_normalized_candidate_email', unique: true, sparse: true },
   );
@@ -427,6 +429,7 @@ export async function connectMongoStorage(
     await client.connect();
     const selectedDatabase = databaseName ?? process.env.MONGODB_DATABASE;
     const db = selectedDatabase ? client.db(selectedDatabase) : client.db();
+    await assertDiscoveryCollectionsMigrated(db);
     return {
       client,
       repositories: createRepositories(db),

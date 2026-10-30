@@ -5,13 +5,14 @@ import { MongoClient } from 'mongodb';
 import type { Document } from 'mongodb';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import { createPhase2Indexes, createPhase4Indexes, createRepositories } from '../src/infrastructure/mongo-storage.ts';
+import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-collection-migration.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
 
 const mongoUri = process.env.MONGODB_TEST_URI;
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
-  'applicant_profiles', 'professor_candidates', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',
+  'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',
 ];
 
 function sampleCandidate(id: string, email: string): ProfessorCandidate {
@@ -47,6 +48,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
   try {
     await client.connect();
     db = client.db('gradreach_test');
+    await migrateDiscoveryCollections(db);
     await createPhase2Indexes(db);
     await createPhase4Indexes(db);
     const repositories = createRepositories(db);
@@ -104,7 +106,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     );
 
     const profileDocument = await db.collection<Document & { _id: string }>('applicant_profiles').findOne({ _id: 'synthetic-profile' });
-    const candidateDocument = await db.collection<Document & { _id: string }>('professor_candidates').findOne({ _id: 'candidate-b' });
+    const candidateDocument = await db.collection<Document & { _id: string }>('discovery_leads').findOne({ _id: 'candidate-b' });
     assert.ok(profileDocument?.profile);
     assert.equal(candidateDocument?.profile, undefined);
     assert.equal(candidateDocument?.candidate && 'applicant' in candidateDocument.candidate, false);
@@ -114,7 +116,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(attemptDocument?.profile, undefined);
     assert.equal(attemptDocument?.candidate, undefined);
     assert.equal((attemptDocument?.attempt as OutreachAttempt | undefined)?.providerMessageId, 'mock-message-id');
-    const candidateIndexes = await db.collection('professor_candidates').listIndexes().toArray();
+    const candidateIndexes = await db.collection('discovery_leads').listIndexes().toArray();
     const attemptIndexes = await db.collection('outreach_attempts').listIndexes().toArray();
     const assessmentIndexes = await db.collection('program_assessments').listIndexes().toArray();
     const programIndexes = await db.collection('programs').listIndexes().toArray();
