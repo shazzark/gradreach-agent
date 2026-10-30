@@ -22,8 +22,7 @@ test('reviewed official-host allowlist contains only the verified exact universi
     Canada: ['uwaterloo.ca'],
     Australia: ['www.sydney.edu.au'],
     China: ['ac.cs.tsinghua.edu.cn'],
-    Thailand: ['math.sc.chula.ac.th'],
-    Europe: ['inf.ethz.ch'],
+    Switzerland: ['inf.ethz.ch'],
     Portugal: ['tecnico.ulisboa.pt'],
     Italy: ['www.polimi.it'],
   });

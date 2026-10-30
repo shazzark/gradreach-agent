@@ -41,3 +41,12 @@ test('rejects non-master target level for this MSc project', async () => {
   profile.applicant.target.degreeLevel = 'doctoral';
   assert.throws(() => parseApplicantProfile(profile), /degreeLevel must be masters/);
 });
+
+test('requires configured countries to be non-empty, trimmed, and unique', async () => {
+  const profile = await exampleProfile() as { applicant: { target: { countries: string[] } } };
+  profile.applicant.target.countries = ['Canada', ' canada '];
+  assert.throws(() => parseApplicantProfile(profile), /countries entries must be trimmed and unique/);
+
+  profile.applicant.target.countries = ['Canada', ''];
+  assert.throws(() => parseApplicantProfile(profile), /countries entries must not be empty/);
+});

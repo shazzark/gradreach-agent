@@ -73,6 +73,18 @@ function stringArrayField(source: Record<string, unknown>, key: string, label: s
   return value;
 }
 
+function countryArrayField(source: Record<string, unknown>, key: string, label: string): string[] {
+  const countries = stringArrayField(source, key, label);
+  const normalized = countries.map((country) => country.trim().toLocaleLowerCase('en'));
+  if (countries.some((country) => !country.trim())) {
+    throw new Error(`${label}.${key} entries must not be empty`);
+  }
+  if (countries.some((country, index) => country !== country.trim()) || new Set(normalized).size !== countries.length) {
+    throw new Error(`${label}.${key} entries must be trimmed and unique`);
+  }
+  return countries;
+}
+
 /** Validates local profile JSON at runtime; TypeScript types alone do not validate file contents. */
 export function parseApplicantProfile(value: unknown): ApplicantProfile {
   const root = record(value, 'profile');
@@ -117,7 +129,7 @@ export function parseApplicantProfile(value: unknown): ApplicantProfile {
         intake: stringField(target, 'intake', 'profile.applicant.target'),
         fields: stringArrayField(target, 'fields', 'profile.applicant.target'),
         researchInterests: stringArrayField(target, 'researchInterests', 'profile.applicant.target'),
-        countries: stringArrayField(target, 'countries', 'profile.applicant.target'),
+        countries: countryArrayField(target, 'countries', 'profile.applicant.target'),
         fundingTypes: stringArrayField(target, 'fundingTypes', 'profile.applicant.target'),
         // Older private profiles remain readable and simply leave affordability unresolved.
         maxAnnualTuition,

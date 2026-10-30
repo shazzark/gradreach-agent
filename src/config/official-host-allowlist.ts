@@ -3,8 +3,7 @@ export const OFFICIAL_HOSTS_BY_REGION = {
   Canada: ['uwaterloo.ca'],
   Australia: ['www.sydney.edu.au'],
   China: ['ac.cs.tsinghua.edu.cn'],
-  Thailand: ['math.sc.chula.ac.th'],
-  Europe: ['inf.ethz.ch'],
+  Switzerland: ['inf.ethz.ch'],
   Portugal: ['tecnico.ulisboa.pt'],
   Italy: ['www.polimi.it'],
 } as const;
