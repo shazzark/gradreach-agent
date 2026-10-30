@@ -4,6 +4,7 @@ import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import { discoverProfessorCandidates, fetchOfficialPage, markCandidateEvidenceReviewed } from '../src/application/research-discovery.ts';
 import { BraveSearchProvider } from '../src/infrastructure/brave-search-provider.ts';
+import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
 
 const profile = parseApplicantProfile({
   applicant: {
@@ -13,6 +14,10 @@ const profile = parseApplicantProfile({
     englishEvidence: { testStatus: '', testName: '', score: '', testDate: '', mediumOfInstructionLetter: '' },
     documents: { academicCvPath: '', transcriptPath: '', portfolioUrl: '', githubUrl: '', projectUrls: [] },
   },
+});
+
+test('reviewed official-host allowlist contains only the verified Canadian university host', () => {
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION, { Canada: ['uwaterloo.ca'] });
 });
 
 test('discovery searches every configured region and persists official-host results as review-gated leads', async () => {
