@@ -90,7 +90,7 @@ test('Gemini evidence triage reuses its configured key and sends only bounded ev
   } });
   const response = await provider.triageEvidence({
     researchCriteria: ['network security', 'machine learning'],
-    leads: [{ leadNumber: 1, evidence: [{ sourceUrl: 'https://cs.kaist.ac.kr/research', excerpt: 'Research in secure networks.' }] }],
+    leads: [{ leadNumber: 1, leadName: 'Synthetic Professor', evidence: [{ sourceUrl: 'https://cs.kaist.ac.kr/research', excerpt: 'Research in secure networks.' }] }],
   });
   assert.deepEqual(response, { recommendations: [] });
   assert.equal(requestUrl, 'https://generativelanguage.googleapis.com/v1beta/models/test-model:generateContent');
@@ -116,7 +116,7 @@ test('Gemini evidence triage defaults to Flash-Lite and omits deprecated Gemini 
     } });
     const response = await provider.triageEvidence({
       researchCriteria: ['synthetic criterion'],
-      leads: [{ leadNumber: 1, evidence: [{ sourceUrl: 'https://example.edu/research', excerpt: 'Synthetic evidence.' }] }],
+      leads: [{ leadNumber: 1, leadName: 'Synthetic Professor', evidence: [{ sourceUrl: 'https://example.edu/research', excerpt: 'Synthetic evidence.' }] }],
     });
     assert.deepEqual(response, { recommendations: [{ leadNumber: 1, recommendation: 'uncertain', facts: [] }] });
   } finally {

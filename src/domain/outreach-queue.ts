@@ -44,6 +44,7 @@ export interface DiscoveryEvidence {
 export type EvidenceTriageRecommendation = 'likely relevant' | 'uncertain' | 'unlikely';
 
 export interface EvidenceTriageFact {
+  kind: 'identity' | 'research' | 'context';
   sourceUrl: string;
   quote: string;
 }
@@ -52,6 +53,7 @@ export interface EvidenceTriageFact {
 export interface CandidateEvidenceTriage {
   candidateId: string;
   recommendation: EvidenceTriageRecommendation;
+  rationale: string;
   facts: EvidenceTriageFact[];
   triagedAt: string;
 }

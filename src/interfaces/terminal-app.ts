@@ -221,10 +221,7 @@ async function run(): Promise<void> {
         stdout.write(recorded ? 'Manual response/follow-up status saved. Message contents were not stored.\n' : 'No sent outreach was found for that candidate.\n');
       } else if (choice === '14') {
         const candidates = await repositories.candidates.list();
-        const researchCriteria = [...new Set([
-          ...profile.applicant.target.fields,
-          ...profile.applicant.target.researchInterests,
-        ].map((item) => item.trim()).filter(Boolean))];
+        const researchCriteria = [...new Set(profile.applicant.target.researchInterests.map((item) => item.trim()).filter(Boolean))];
         const results = await triageCandidateEvidence({
           candidates,
           researchCriteria,
@@ -234,7 +231,7 @@ async function run(): Promise<void> {
         });
         stdout.write(`Saved ${results.length} source-validated AI triage records separately from candidate review state.\n`);
         for (const result of results) {
-          stdout.write(`${terminalText(result.candidateId)} | ${result.recommendation}\n`);
+          stdout.write(`${terminalText(result.candidateId)} | ${result.recommendation}\n  ${terminalText(result.rationale)}\n`);
           for (const fact of result.facts) stdout.write(`  ${terminalText(fact.sourceUrl)}\n  "${terminalText(fact.quote)}"\n`);
         }
       } else {
