@@ -94,10 +94,38 @@ test('Gemini evidence triage reuses its configured key and sends only bounded ev
   });
   assert.deepEqual(response, { recommendations: [] });
   assert.equal(requestUrl, 'https://generativelanguage.googleapis.com/v1beta/models/test-model:generateContent');
-  const request = JSON.parse(requestBody) as { generationConfig: { maxOutputTokens: number }; contents: Array<{ parts: Array<{ text: string }> }> };
+  const request = JSON.parse(requestBody) as { generationConfig: { maxOutputTokens: number; temperature?: number }; contents: Array<{ parts: Array<{ text: string }> }> };
   assert.equal(request.generationConfig.maxOutputTokens, 4096);
+  assert.equal(request.generationConfig.temperature, 0.1);
   assert.match(request.contents[0]!.parts[0]!.text, /network security/);
   assert.match(request.contents[0]!.parts[0]!.text, /Research in secure networks\./);
   assert.doesNotMatch(request.contents[0]!.parts[0]!.text, /applicant name|transcript|CV|email address/i);
   assert.equal(requestBody.includes(apiKey), false);
+});
+
+test('Gemini evidence triage defaults to Flash-Lite and omits deprecated Gemini 3 sampling settings', async () => {
+  const previousModel = process.env.LLM_PROVIDER_MODEL;
+  delete process.env.LLM_PROVIDER_MODEL;
+  let requestUrl = '';
+  let requestBody = '';
+  try {
+    const provider = new GeminiDraftProvider({ apiKey: 'synthetic-triage-key', fetchImpl: async (input, init) => {
+      requestUrl = String(input);
+      requestBody = String(init?.body);
+      return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ recommendations: [{ leadNumber: 1, recommendation: 'uncertain', facts: [] }] }) }] } }] });
+    } });
+    const response = await provider.triageEvidence({
+      researchCriteria: ['synthetic criterion'],
+      leads: [{ leadNumber: 1, evidence: [{ sourceUrl: 'https://example.edu/research', excerpt: 'Synthetic evidence.' }] }],
+    });
+    assert.deepEqual(response, { recommendations: [{ leadNumber: 1, recommendation: 'uncertain', facts: [] }] });
+  } finally {
+    if (previousModel === undefined) delete process.env.LLM_PROVIDER_MODEL;
+    else process.env.LLM_PROVIDER_MODEL = previousModel;
+  }
+  assert.equal(requestUrl, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent');
+  const request = JSON.parse(requestBody) as { generationConfig: Record<string, unknown> };
+  assert.equal(request.generationConfig.responseMimeType, 'application/json');
+  assert.equal(request.generationConfig.maxOutputTokens, 4096);
+  assert.equal('temperature' in request.generationConfig, false);
 });

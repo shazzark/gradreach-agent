@@ -93,12 +93,18 @@ export class GeminiDraftProvider {
   private async generateJson(prompt: string, maxOutputTokens: number, maxResponseLength: number, temperature: number): Promise<unknown> {
     const apiKey = this.options.apiKey ?? process.env.LLM_PROVIDER_API_KEY;
     if (!apiKey?.trim()) throw new Error('LLM_PROVIDER_API_KEY must be configured to use Gemini');
-    const model = this.options.model ?? process.env.LLM_PROVIDER_MODEL ?? 'gemini-2.5-flash';
+    const model = this.options.model ?? process.env.LLM_PROVIDER_MODEL ?? 'gemini-3.5-flash-lite';
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(model)) throw new Error('LLM_PROVIDER_MODEL contains invalid characters');
     const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
+    const generationConfig: { responseMimeType: string; temperature?: number; maxOutputTokens: number } = {
+      responseMimeType: 'application/json',
+      maxOutputTokens,
+    };
+    const versionMajor = /^gemini-(\d+)(?:\.|-)/.exec(model)?.[1];
+    if (versionMajor === undefined || Number(versionMajor) < 3) generationConfig.temperature = temperature;
     const response = await (this.options.fetchImpl ?? fetch)(url, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey, accept: 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature, maxOutputTokens } }),
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`Gemini request failed with HTTP ${response.status}`);
