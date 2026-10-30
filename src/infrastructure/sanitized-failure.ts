@@ -16,6 +16,10 @@ export interface SafeFailureRecord {
   responseReceived: boolean;
   statusCode?: number;
   resourceUrl?: string;
+  resourceHost?: string;
+  resourcePath?: string;
+  contentTypeIsHtml?: boolean | null;
+  bodyEmpty?: boolean | null;
   errorName?: string;
   causeCode?: string;
   braveErrorCode?: string;
@@ -25,6 +29,8 @@ export interface SafeFailureRecord {
 export interface SafeResponseDiagnostics {
   responseReceived: true;
   statusCode?: number;
+  contentTypeIsHtml?: boolean | null;
+  bodyEmpty?: boolean | null;
   braveErrorCode?: string;
   requestId?: string;
 }
@@ -53,6 +59,8 @@ export class SanitizedIntegrationError extends Error {
     causeCode?: string;
     braveErrorCode?: string;
     requestId?: string;
+    contentTypeIsHtml?: boolean | null;
+    bodyEmpty?: boolean | null;
   } = {}) {
     const requestedStatusCode = options.statusCode;
     const statusCode = typeof requestedStatusCode === 'number' && Number.isInteger(requestedStatusCode) &&
@@ -60,6 +68,7 @@ export class SanitizedIntegrationError extends Error {
       ? requestedStatusCode
       : undefined;
     const resourceUrl = sanitizeResourceUrl(options.resourceUrl);
+    const resourceLocation = resourceParts(resourceUrl);
     const errorName = sanitizeErrorName(options.errorName);
     const causeCode = sanitizeTransportCode(options.causeCode);
     const braveErrorCode = sanitizeIdentifier(options.braveErrorCode);
@@ -77,6 +86,12 @@ export class SanitizedIntegrationError extends Error {
       responseReceived: options.responseReceived === true,
       ...(statusCode ? { statusCode } : {}),
       ...(resourceUrl ? { resourceUrl } : {}),
+      ...(resourceLocation ? {
+        resourceHost: resourceLocation.hostname,
+        resourcePath: resourceLocation.path,
+        contentTypeIsHtml: options.contentTypeIsHtml ?? null,
+        bodyEmpty: options.bodyEmpty ?? null,
+      } : {}),
       ...(errorName ? { errorName } : {}),
       ...(causeCode ? { causeCode } : {}),
       ...(braveErrorCode ? { braveErrorCode } : {}),
@@ -89,7 +104,9 @@ export class SanitizedIntegrationError extends Error {
 export function safeFailureRecord(error: unknown, resourceUrl?: string): SafeFailureRecord {
   if (error instanceof SanitizedIntegrationError) {
     const safeUrl = sanitizeResourceUrl(resourceUrl);
-    return safeUrl && !error.failure.resourceUrl ? { ...error.failure, resourceUrl: safeUrl } : error.failure;
+    return safeUrl && !error.failure.resourceUrl
+      ? new SanitizedIntegrationError(error.failure.kind, { ...error.failure, resourceUrl: safeUrl }).failure
+      : error.failure;
   }
 
   const details = collectErrorDetails(error);
@@ -111,10 +128,14 @@ export function safeFailureRecord(error: unknown, resourceUrl?: string): SafeFai
 }
 
 /** Converts an unknown provider/fetch error into an error safe to persist or show. */
-export function sanitizedIntegrationError(error: unknown, resourceUrl?: string): SanitizedIntegrationError {
-  if (error instanceof SanitizedIntegrationError && (!resourceUrl || error.failure.resourceUrl)) return error;
+export function sanitizedIntegrationError(
+  error: unknown,
+  resourceUrl?: string,
+  responseDetails?: SafeResponseDiagnostics,
+): SanitizedIntegrationError {
+  if (error instanceof SanitizedIntegrationError && (!resourceUrl || error.failure.resourceUrl) && !responseDetails) return error;
   const record = safeFailureRecord(error, resourceUrl);
-  return new SanitizedIntegrationError(record.kind, record);
+  return new SanitizedIntegrationError(record.kind, { ...record, ...responseDetails });
 }
 
 export function failureForHttpStatus(
@@ -211,6 +232,17 @@ function sanitizeResourceUrl(value: string | undefined): string | undefined {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password) return undefined;
     return `${url.origin}${url.pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function resourceParts(value: string | undefined): { hostname: string; path: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+    return { hostname: url.hostname.toLowerCase(), path: url.pathname };
   } catch {
     return undefined;
   }

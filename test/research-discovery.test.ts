@@ -60,6 +60,7 @@ test('discovery searches every configured region and persists official-host resu
   assert.equal(result.searches, 4);
   assert.equal(result.saved, 2);
   assert.equal(result.rejected, 4);
+  assert.deepEqual(result.rejectedByCheck, { exactHost: 4, title: 0, excerpt: 0 });
   assert.equal(queried.length, 4);
   assert.ok(queried.some((query) => query.includes('Country A')));
   assert.ok(queried.some((query) => query.includes('Country B')));
@@ -71,6 +72,41 @@ test('discovery searches every configured region and persists official-host resu
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.sourceUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.retrievedAt === '2026-10-19T12:00:00.000Z'));
   assert.ok(saved.every((candidate) => candidate.programUrl === undefined && candidate.officialEmail === undefined));
+});
+
+test('discovery counts failed result checks without retaining result content', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target,
+      countries: ['Country A'], fields: [], researchInterests: ['Computer Science'],
+    } },
+  });
+  const saved: ProfessorCandidate[] = [];
+  const rejectionChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean }> = [];
+  const result = await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [
+      { title: 'Off-host lead', url: 'https://outside.example.edu/person', excerpt: 'Not allowed.' },
+      { title: '', url: 'https://university.example.edu/no-title', excerpt: '' },
+      { title: 'Missing excerpt', url: 'https://university.example.edu/no-excerpt', excerpt: '' },
+      { title: '', url: 'https://university.example.edu/no-title-either', excerpt: 'Present.' },
+      { title: 'Allowed lead', url: 'https://university.example.edu/person', excerpt: 'Synthetic excerpt.' },
+    ]; } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] },
+      fetchPage: async (url) => ({ url, html: '<p>Official page</p>' }),
+      onRejectedResult: (checks) => rejectionChecks.push(checks),
+    },
+  });
+
+  assert.equal(result.rejected, 4);
+  assert.deepEqual(result.rejectedByCheck, { exactHost: 1, title: 2, excerpt: 2 });
+  assert.equal(rejectionChecks.length, 4);
+  assert.ok(rejectionChecks.every((checks) => Object.keys(checks).sort().join(',') === 'exactHost,excerpt,title'));
+  assert.equal(saved.length, 1);
+  assert.equal(JSON.stringify(result.rejectedByCheck).includes('university.example.edu'), false);
 });
 
 test('discovery refuses to silently skip a configured region without reviewed official hosts', async () => {
@@ -101,6 +137,7 @@ test('discovery rejects broad public-suffix allowlists before searching', async 
 test('Brave adapter authenticates, requests a bounded result count, and filters unsafe URLs', async () => {
   let requestUrl = '';
   let requestHeaders: Headers | undefined;
+  const rejectedChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean }> = [];
   const provider = new BraveSearchProvider('synthetic-token', async (input, init) => {
     requestUrl = String(input);
     requestHeaders = new Headers(init?.headers);
@@ -108,14 +145,22 @@ test('Brave adapter authenticates, requests a bounded result count, and filters 
       { title: 'Official result', url: 'https://university.example.edu/professor', description: 'Synthetic snippet.' },
       { title: 'Unsafe result', url: 'http://university.example.edu/professor', description: 'Synthetic snippet.' },
       { title: 'Malformed record', url: 'https://university.example.edu/other' },
+      { title: '', url: 'https://university.example.edu/no-title', description: 'Synthetic snippet.' },
     ] } }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
-  const results = await provider.search('synthetic query', { countryCode: 'gb', count: 50 });
+  const results = await provider.search('synthetic query', {
+    countryCode: 'gb', count: 50, onRejectedResult: (checks) => rejectedChecks.push(checks),
+  });
   const parsedUrl = new URL(requestUrl);
   assert.equal(parsedUrl.searchParams.get('count'), '20');
   assert.equal(parsedUrl.searchParams.get('country'), 'GB');
   assert.equal(requestHeaders?.get('X-Subscription-Token'), 'synthetic-token');
   assert.deepEqual(results, [{ title: 'Official result', url: 'https://university.example.edu/professor', excerpt: 'Synthetic snippet.' }]);
+  assert.deepEqual(rejectedChecks, [
+    { exactHost: true, title: false, excerpt: false },
+    { exactHost: false, title: false, excerpt: true },
+    { exactHost: false, title: true, excerpt: false },
+  ]);
 });
 
 test('Brave adapter fails clearly when credentials are missing without exposing credentials', async () => {
@@ -268,6 +313,11 @@ test('official page failures distinguish HTTP, rate limit, content, and network 
       assert.equal(error.failure.kind, kind);
       assert.equal(error.failure.statusCode, status);
       assert.equal(error.failure.resourceUrl, 'https://university.example.edu/people');
+      assert.equal(error.failure.resourceHost, 'university.example.edu');
+      assert.equal(error.failure.resourcePath, '/people');
+      assert.equal(error.failure.responseReceived, true);
+      assert.equal(error.failure.contentTypeIsHtml, true);
+      assert.equal(error.failure.bodyEmpty, null);
       assert.equal(JSON.stringify(error.failure).includes(secret), false);
       return true;
     });
@@ -277,7 +327,23 @@ test('official page failures distinguish HTTP, rate limit, content, and network 
     new Response(secret, { status: 200, headers: { 'content-type': 'application/json' } })), (error: unknown) => {
     assert.ok(error instanceof SanitizedIntegrationError);
     assert.equal(error.failure.kind, 'invalid_content');
+    assert.equal(error.failure.responseReceived, true);
+    assert.equal(error.failure.statusCode, 200);
+    assert.equal(error.failure.resourceHost, 'university.example.edu');
+    assert.equal(error.failure.resourcePath, '/people');
+    assert.equal(error.failure.contentTypeIsHtml, false);
+    assert.equal(error.failure.bodyEmpty, null);
     assert.equal(JSON.stringify(error.failure).includes(secret), false);
+    return true;
+  });
+
+  await assert.rejects(fetchOfficialPage(url, ['university.example.edu'], async () =>
+    new Response('  \n ', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.kind, 'invalid_content');
+    assert.equal(error.failure.contentTypeIsHtml, true);
+    assert.equal(error.failure.bodyEmpty, true);
+    assert.equal(error.failure.resourcePath, '/people');
     return true;
   });
 
@@ -287,9 +353,48 @@ test('official page failures distinguish HTTP, rate limit, content, and network 
     assert.ok(error instanceof SanitizedIntegrationError);
     assert.equal(error.failure.kind, 'dns_tls');
     assert.equal(error.failure.resourceUrl, 'https://university.example.edu/people');
+    assert.equal(error.failure.resourceHost, 'university.example.edu');
+    assert.equal(error.failure.resourcePath, '/people');
+    assert.equal(error.failure.responseReceived, false);
+    assert.equal(error.failure.contentTypeIsHtml, null);
+    assert.equal(error.failure.bodyEmpty, null);
     assert.equal(JSON.stringify(error.failure).includes(secret), false);
     return true;
   });
+});
+
+test('discovery reports only sanitized official-page failure metadata', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target,
+      countries: ['Country A'], fields: [], researchInterests: ['Computer Science'],
+    } },
+  });
+  const secret = 'private-query-token';
+  const url = `https://university.example.edu/person?token=${secret}`;
+  let pageFailure: ReturnType<typeof safeFailureRecord> | undefined;
+  await assert.rejects(discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [{ title: 'Synthetic result', url, excerpt: 'Synthetic excerpt.' }]; } },
+    repository: { async list() { return []; }, async save() {} },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] },
+      fetchPage: async () => { throw new SanitizedIntegrationError('http_status', {
+        statusCode: 500, resourceUrl: url, responseReceived: true, contentTypeIsHtml: true,
+      }); },
+      onOfficialPageFailure: (failure) => { pageFailure = failure; },
+    },
+  }), SanitizedIntegrationError);
+
+  assert.equal(pageFailure?.kind, 'http_status');
+  assert.equal(pageFailure?.resourceHost, 'university.example.edu');
+  assert.equal(pageFailure?.resourcePath, '/person');
+  assert.equal(pageFailure?.statusCode, 500);
+  assert.equal(pageFailure?.contentTypeIsHtml, true);
+  assert.equal(pageFailure?.bodyEmpty, null);
+  assert.equal(JSON.stringify(pageFailure).includes(secret), false);
+  assert.equal(JSON.stringify(pageFailure).includes('?token'), false);
 });
 
 test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {
@@ -376,7 +481,11 @@ test('discovery does no search when the existing pool already meets the 200-cand
     options: { officialHostsByRegion: {}, targetPoolSize: 200 },
   });
   assert.equal(searches, 0);
-  assert.deepEqual(result, { searches: 0, saved: 0, rejected: 0, poolSize: 200, targetReached: true });
+  assert.deepEqual(result, {
+    searches: 0, saved: 0, rejected: 0,
+    rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 },
+    poolSize: 200, targetReached: true,
+  });
 });
 
 test('discovery target must be from one through 200', async () => {

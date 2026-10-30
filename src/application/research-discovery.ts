@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { DiscoveryEvidence, ProfessorCandidate } from '../domain/outreach-queue.ts';
-import type { SearchProvider, SearchResult } from '../infrastructure/brave-search-provider.ts';
-import { failureForHttpStatus, sanitizedIntegrationError, SanitizedIntegrationError } from '../infrastructure/sanitized-failure.ts';
+import type { RejectedSearchResultChecks, SearchProvider, SearchResult } from '../infrastructure/brave-search-provider.ts';
+import { failureForHttpStatus, safeFailureRecord, sanitizedIntegrationError, SanitizedIntegrationError, type SafeFailureRecord, type SafeResponseDiagnostics } from '../infrastructure/sanitized-failure.ts';
 
 const PUBLIC_SUFFIXES = new Set([
   'com', 'edu', 'gov', 'mil', 'net', 'org',
@@ -25,6 +25,8 @@ export interface DiscoveryOptions {
   targetPoolSize?: number;
   now?: () => Date;
   fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
+  onRejectedResult?: (checks: RejectedSearchResultChecks) => void;
+  onOfficialPageFailure?: (failure: SafeFailureRecord) => void;
 }
 
 function normalizeHost(value: string): string {
@@ -138,38 +140,47 @@ export async function fetchOfficialPage(url: string, allowedHosts: string[], fet
   } catch (error) {
     throw sanitizedIntegrationError(error, url);
   }
-  if (response.status >= 300 && response.status < 400) {
-    throw new SanitizedIntegrationError('rejected_redirect', { statusCode: response.status, resourceUrl: url });
-  }
-  if (!response.ok) throw failureForHttpStatus(response.status, url);
-  const finalUrl = response.url || url;
-  if (!isAllowedOfficialUrl(finalUrl, hosts)) throw new SanitizedIntegrationError('disallowed_host', { resourceUrl: url });
   const contentType = response.headers.get('content-type') ?? '';
+  const responseDetails: SafeResponseDiagnostics = {
+    responseReceived: true,
+    statusCode: response.status,
+    contentTypeIsHtml: contentType.toLowerCase().includes('text/html'),
+    bodyEmpty: null,
+  };
+  if (response.status >= 300 && response.status < 400) {
+    throw new SanitizedIntegrationError('rejected_redirect', { ...responseDetails, resourceUrl: url });
+  }
+  if (!response.ok) throw failureForHttpStatus(response.status, url, responseDetails);
+  const finalUrl = response.url || url;
+  if (!isAllowedOfficialUrl(finalUrl, hosts)) throw new SanitizedIntegrationError('disallowed_host', { ...responseDetails, resourceUrl: url });
   if (contentType && !contentType.toLowerCase().includes('text/html')) {
-    throw new SanitizedIntegrationError('invalid_content', { resourceUrl: url });
+    throw new SanitizedIntegrationError('invalid_content', { ...responseDetails, resourceUrl: url });
   }
   let html: string;
   try {
     html = await response.text();
   } catch (error) {
-    throw sanitizedIntegrationError(error, url);
+    throw sanitizedIntegrationError(error, url, responseDetails);
   }
-  if (!html.trim()) throw new SanitizedIntegrationError('invalid_content', { resourceUrl: url });
+  if (!html.trim()) throw new SanitizedIntegrationError('invalid_content', { ...responseDetails, bodyEmpty: true, resourceUrl: url });
   return { url: canonicalizeSourceUrl(finalUrl), html: html.slice(0, 2_000_000) };
 }
 
 /** Fetches the search result and its first same-host program/contact links, storing all evidence unverified. */
-export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now'>): Promise<ProfessorCandidate> {
+export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now' | 'onOfficialPageFailure'>): Promise<ProfessorCandidate> {
   const fetchPage = options.fetchPage ?? ((url: string) => fetchOfficialPage(url, hosts));
   const loadPage = async (url: string) => {
     let page: { url: string; html: string };
     try {
       page = await fetchPage(url);
     } catch (error) {
+      options.onOfficialPageFailure?.(safeFailureRecord(error, url));
       throw sanitizedIntegrationError(error, url);
     }
     if (!isAllowedOfficialUrl(page.url, hosts)) {
-      throw new SanitizedIntegrationError('disallowed_host', { resourceUrl: url });
+      const error = new SanitizedIntegrationError('disallowed_host', { resourceUrl: url });
+      options.onOfficialPageFailure?.(error.failure);
+      throw error;
     }
     return page;
   };
@@ -228,7 +239,7 @@ export async function discoverProfessorCandidates(input: {
   provider: SearchProvider;
   repository: CandidateDiscoveryRepository;
   options: DiscoveryOptions;
-}): Promise<{ searches: number; saved: number; rejected: number; poolSize: number; targetReached: boolean }> {
+}): Promise<{ searches: number; saved: number; rejected: number; rejectedByCheck: { exactHost: number; title: number; excerpt: number }; poolSize: number; targetReached: boolean }> {
   const targetPoolSize = input.options.targetPoolSize ?? 200;
   if (!Number.isInteger(targetPoolSize) || targetPoolSize < 1 || targetPoolSize > 200) {
     throw new Error('targetPoolSize must be an integer from 1 to 200');
@@ -240,7 +251,7 @@ export async function discoverProfessorCandidates(input: {
     .map((item) => canonicalizeSourceUrl(item.sourceUrl))));
   let poolSize = knownIds.size;
   if (poolSize >= targetPoolSize) {
-    return { searches: 0, saved: 0, rejected: 0, poolSize, targetReached: true };
+    return { searches: 0, saved: 0, rejected: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: true };
   }
   const regions = [...new Set(input.profile.applicant.target.countries.map((country) => country.trim()).filter(Boolean))];
   if (regions.length === 0) throw new Error('At least one configured target country is required for discovery');
@@ -251,6 +262,7 @@ export async function discoverProfessorCandidates(input: {
   let searches = 0;
   let saved = 0;
   let rejected = 0;
+  const rejectedByCheck = { exactHost: 0, title: 0, excerpt: 0 };
   const seenUrls = new Set<string>(knownUrls);
   discovery: for (const region of regions) {
     const configuredHosts = input.options.officialHostsByRegion[region];
@@ -262,12 +274,22 @@ export async function discoverProfessorCandidates(input: {
         const results = await input.provider.search(query, {
           ...(input.options.countryCodesByRegion?.[region] ? { countryCode: input.options.countryCodesByRegion[region] } : {}),
           count: input.options.resultsPerQuery ?? 10,
+          ...(input.options.onRejectedResult ? { onRejectedResult: input.options.onRejectedResult } : {}),
         });
         searches += 1;
         const retrievedAt = (input.options.now?.() ?? new Date()).toISOString();
         for (const result of results) {
-          if (!isAllowedOfficialUrl(result.url, hosts) || !result.title.trim() || !result.excerpt.trim()) {
+          const failedChecks = {
+            exactHost: !isAllowedOfficialUrl(result.url, hosts),
+            title: !result.title.trim(),
+            excerpt: !result.excerpt.trim(),
+          };
+          if (failedChecks.exactHost || failedChecks.title || failedChecks.excerpt) {
             rejected += 1;
+            if (failedChecks.exactHost) rejectedByCheck.exactHost += 1;
+            if (failedChecks.title) rejectedByCheck.title += 1;
+            if (failedChecks.excerpt) rejectedByCheck.excerpt += 1;
+            input.options.onRejectedResult?.(failedChecks);
             continue;
           }
           const canonicalUrl = canonicalizeSourceUrl(result.url);
@@ -285,5 +307,5 @@ export async function discoverProfessorCandidates(input: {
       }
     }
   }
-  return { searches, saved, rejected, poolSize, targetReached: poolSize >= targetPoolSize };
+  return { searches, saved, rejected, rejectedByCheck, poolSize, targetReached: poolSize >= targetPoolSize };
 }

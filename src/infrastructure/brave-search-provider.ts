@@ -7,8 +7,20 @@ export interface SearchResult {
   excerpt: string;
 }
 
+export interface RejectedSearchResultChecks {
+  exactHost: boolean;
+  title: boolean;
+  excerpt: boolean;
+}
+
+export interface SearchOptions {
+  countryCode?: string;
+  count?: number;
+  onRejectedResult?: (checks: RejectedSearchResultChecks) => void;
+}
+
 export interface SearchProvider {
-  search(query: string, options?: { countryCode?: string; count?: number }): Promise<SearchResult[]>;
+  search(query: string, options?: SearchOptions): Promise<SearchResult[]>;
 }
 
 interface BraveResponse {
@@ -25,7 +37,7 @@ export class BraveSearchProvider implements SearchProvider {
     this.fetchImpl = fetchImpl;
   }
 
-  async search(query: string, options: { countryCode?: string; count?: number } = {}): Promise<SearchResult[]> {
+  async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     if (!this.apiKey?.trim()) throw new SanitizedIntegrationError('missing_configuration');
     if (!query.trim() || query.length > 600) throw new SanitizedIntegrationError('invalid_request');
     const url = new URL('https://api.search.brave.com/res/v1/web/search');
@@ -71,13 +83,21 @@ export class BraveSearchProvider implements SearchProvider {
       throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
     return web.results.flatMap((result) => {
-      if (typeof result.title !== 'string' || typeof result.url !== 'string' || typeof result.description !== 'string') return [];
+      const title = typeof result.title === 'string' ? result.title.trim() : '';
+      const resultUrl = typeof result.url === 'string' ? result.url : '';
+      const excerpt = typeof result.description === 'string' ? result.description.trim() : '';
+      let exactHost = true;
       try {
-        if (new URL(result.url).protocol !== 'https:') return [];
+        exactHost = new URL(resultUrl).protocol !== 'https:';
       } catch {
+        exactHost = true;
+      }
+      const checks = { exactHost, title: !title, excerpt: !excerpt };
+      if (checks.exactHost || checks.title || checks.excerpt) {
+        options.onRejectedResult?.(checks);
         return [];
       }
-      return [{ title: result.title.trim(), url: result.url, excerpt: result.description.trim() }];
+      return [{ title, url: resultUrl, excerpt }];
     });
   }
 }
