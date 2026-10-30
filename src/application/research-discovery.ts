@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { DiscoveryEvidence, ProfessorCandidate } from '../domain/outreach-queue.ts';
-import type { RejectedSearchResultChecks, SearchProvider, SearchResult } from '../infrastructure/brave-search-provider.ts';
+import { diagnosticResultHostname, type RejectedSearchResultChecks, type SearchProvider, type SearchResult } from '../infrastructure/brave-search-provider.ts';
 import { failureForHttpStatus, safeFailureRecord, sanitizedIntegrationError, SanitizedIntegrationError, type SafeFailureRecord, type SafeResponseDiagnostics } from '../infrastructure/sanitized-failure.ts';
 
 const PUBLIC_SUFFIXES = new Set([
@@ -283,6 +283,7 @@ export async function discoverProfessorCandidates(input: {
             exactHost: !isAllowedOfficialUrl(result.url, hosts),
             title: !result.title.trim(),
             excerpt: !result.excerpt.trim(),
+            hostname: diagnosticResultHostname(result.url),
           };
           if (failedChecks.exactHost || failedChecks.title || failedChecks.excerpt) {
             rejected += 1;
@@ -297,7 +298,13 @@ export async function discoverProfessorCandidates(input: {
           seenUrls.add(canonicalUrl);
           const candidate = candidateFor(result, canonicalUrl, region, query, retrievedAt);
           if (knownIds.has(candidate.id)) continue;
-          await enrichOfficialCandidate(candidate, hosts, input.options);
+          try {
+            await enrichOfficialCandidate(candidate, hosts, input.options);
+          } catch (error) {
+            // A bad or unavailable official page rejects this lead, but should not discard later results.
+            if (error instanceof SanitizedIntegrationError) continue;
+            throw error;
+          }
           await input.repository.save(candidate);
           knownIds.add(candidate.id);
           poolSize += 1;

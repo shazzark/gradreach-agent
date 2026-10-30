@@ -83,7 +83,7 @@ test('discovery counts failed result checks without retaining result content', a
     } },
   });
   const saved: ProfessorCandidate[] = [];
-  const rejectionChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean }> = [];
+  const rejectionChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean; hostname: string | null }> = [];
   const result = await discoverProfessorCandidates({
     profile: singleCountryProfile,
     provider: { async search() { return [
@@ -104,7 +104,13 @@ test('discovery counts failed result checks without retaining result content', a
   assert.equal(result.rejected, 4);
   assert.deepEqual(result.rejectedByCheck, { exactHost: 1, title: 2, excerpt: 2 });
   assert.equal(rejectionChecks.length, 4);
-  assert.ok(rejectionChecks.every((checks) => Object.keys(checks).sort().join(',') === 'exactHost,excerpt,title'));
+  assert.ok(rejectionChecks.every((checks) => Object.keys(checks).sort().join(',') === 'exactHost,excerpt,hostname,title'));
+  assert.deepEqual(rejectionChecks.map(({ hostname, exactHost, title, excerpt }) => ({ hostname, exactHost, title, excerpt })), [
+    { hostname: 'outside.example.edu', exactHost: true, title: false, excerpt: false },
+    { hostname: 'university.example.edu', exactHost: false, title: true, excerpt: true },
+    { hostname: 'university.example.edu', exactHost: false, title: false, excerpt: true },
+    { hostname: 'university.example.edu', exactHost: false, title: true, excerpt: false },
+  ]);
   assert.equal(saved.length, 1);
   assert.equal(JSON.stringify(result.rejectedByCheck).includes('university.example.edu'), false);
 });
@@ -137,7 +143,7 @@ test('discovery rejects broad public-suffix allowlists before searching', async 
 test('Brave adapter authenticates, requests a bounded result count, and filters unsafe URLs', async () => {
   let requestUrl = '';
   let requestHeaders: Headers | undefined;
-  const rejectedChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean }> = [];
+  const rejectedChecks: Array<{ exactHost: boolean; title: boolean; excerpt: boolean; hostname: string | null }> = [];
   const provider = new BraveSearchProvider('synthetic-token', async (input, init) => {
     requestUrl = String(input);
     requestHeaders = new Headers(init?.headers);
@@ -157,10 +163,27 @@ test('Brave adapter authenticates, requests a bounded result count, and filters 
   assert.equal(requestHeaders?.get('X-Subscription-Token'), 'synthetic-token');
   assert.deepEqual(results, [{ title: 'Official result', url: 'https://university.example.edu/professor', excerpt: 'Synthetic snippet.' }]);
   assert.deepEqual(rejectedChecks, [
-    { exactHost: true, title: false, excerpt: false },
-    { exactHost: false, title: false, excerpt: true },
-    { exactHost: false, title: true, excerpt: false },
+    { exactHost: true, title: false, excerpt: false, hostname: 'university.example.edu' },
+    { exactHost: false, title: false, excerpt: true, hostname: 'university.example.edu' },
+    { exactHost: false, title: true, excerpt: false, hostname: 'university.example.edu' },
   ]);
+  assert.ok(rejectedChecks.every((checks) => Object.keys(checks).sort().join(',') === 'exactHost,excerpt,hostname,title'));
+  assert.equal(JSON.stringify(rejectedChecks).includes('/professor'), false);
+  assert.equal(JSON.stringify(rejectedChecks).includes('synthetic query'), false);
+});
+
+test('result hostname diagnostics omit URLs with embedded credentials and malformed values', async () => {
+  const provider = new BraveSearchProvider('synthetic-token', async () => new Response(JSON.stringify({ web: { results: [
+    { title: '', url: 'https://user:password@university.example.edu/person?token=secret', description: 'private excerpt' },
+    { title: '', url: 'not a URL?query=private', description: 'private excerpt' },
+  ] } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  const diagnostics: Array<{ exactHost: boolean; title: boolean; excerpt: boolean; hostname: string | null }> = [];
+  await provider.search('private query', { onRejectedResult: (checks) => diagnostics.push(checks) });
+  assert.deepEqual(diagnostics.map((item) => item.hostname), [null, null]);
+  const serialized = JSON.stringify(diagnostics);
+  for (const privateValue of ['password', 'secret', 'private excerpt', 'private query', '/person']) {
+    assert.equal(serialized.includes(privateValue), false);
+  }
 });
 
 test('Brave adapter fails clearly when credentials are missing without exposing credentials', async () => {
@@ -374,7 +397,7 @@ test('discovery reports only sanitized official-page failure metadata', async ()
   const secret = 'private-query-token';
   const url = `https://university.example.edu/person?token=${secret}`;
   let pageFailure: ReturnType<typeof safeFailureRecord> | undefined;
-  await assert.rejects(discoverProfessorCandidates({
+  const result = await discoverProfessorCandidates({
     profile: singleCountryProfile,
     provider: { async search() { return [{ title: 'Synthetic result', url, excerpt: 'Synthetic excerpt.' }]; } },
     repository: { async list() { return []; }, async save() {} },
@@ -385,8 +408,9 @@ test('discovery reports only sanitized official-page failure metadata', async ()
       }); },
       onOfficialPageFailure: (failure) => { pageFailure = failure; },
     },
-  }), SanitizedIntegrationError);
+  });
 
+  assert.equal(result.saved, 0);
   assert.equal(pageFailure?.kind, 'http_status');
   assert.equal(pageFailure?.resourceHost, 'university.example.edu');
   assert.equal(pageFailure?.resourcePath, '/person');
@@ -395,6 +419,47 @@ test('discovery reports only sanitized official-page failure metadata', async ()
   assert.equal(pageFailure?.bodyEmpty, null);
   assert.equal(JSON.stringify(pageFailure).includes(secret), false);
   assert.equal(JSON.stringify(pageFailure).includes('?token'), false);
+});
+
+test('discovery skips a result whose official page is invalid and continues to later results', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target,
+      countries: ['Country A'], fields: [], researchInterests: ['Computer Science'],
+    } },
+  });
+  const saved: ProfessorCandidate[] = [];
+  const pageFailures: Array<{ kind: string; resourceHost: string | undefined; resourcePath: string | undefined }> = [];
+  const result = await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [
+      { title: 'PDF lead', url: 'https://university.example.edu/paper.pdf', excerpt: 'A result that points to a PDF.' },
+      { title: 'HTML lead', url: 'https://university.example.edu/faculty/person', excerpt: 'An HTML source lead.' },
+    ]; } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] },
+      async fetchPage(url) {
+        if (url.endsWith('.pdf')) {
+          throw new SanitizedIntegrationError('invalid_content', {
+            resourceUrl: url, responseReceived: true, statusCode: 200, contentTypeIsHtml: false,
+          });
+        }
+        return { url, html: '<p>Official HTML profile</p>' };
+      },
+      onOfficialPageFailure: (failure) => pageFailures.push({
+        kind: failure.kind,
+        resourceHost: failure.resourceHost,
+        resourcePath: failure.resourcePath,
+      }),
+    },
+  });
+  assert.equal(result.searches, 1);
+  assert.equal(result.saved, 1);
+  assert.deepEqual(saved.map((candidate) => candidate.name), ['HTML lead']);
+  assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
+  assert.deepEqual(pageFailures, [{ kind: 'invalid_content', resourceHost: 'university.example.edu', resourcePath: '/paper.pdf' }]);
 });
 
 test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {

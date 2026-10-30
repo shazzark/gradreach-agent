@@ -11,6 +11,17 @@ export interface RejectedSearchResultChecks {
   exactHost: boolean;
   title: boolean;
   excerpt: boolean;
+  /** Host only; rejected URLs and their paths, queries, and credentials are never retained. */
+  hostname: string | null;
+}
+
+export function diagnosticResultHostname(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.username || url.password ? null : url.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 export interface SearchOptions {
@@ -92,7 +103,7 @@ export class BraveSearchProvider implements SearchProvider {
       } catch {
         exactHost = true;
       }
-      const checks = { exactHost, title: !title, excerpt: !excerpt };
+      const checks = { exactHost, title: !title, excerpt: !excerpt, hostname: diagnosticResultHostname(resultUrl) };
       if (checks.exactHost || checks.title || checks.excerpt) {
         options.onRejectedResult?.(checks);
         return [];
