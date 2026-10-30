@@ -1,5 +1,5 @@
 import './local-env.ts';
-import { failureForHttpStatus, sanitizedIntegrationError, SanitizedIntegrationError } from './sanitized-failure.ts';
+import { failureForHttpStatus, safeBraveResponseDiagnostics, sanitizedIntegrationError, SanitizedIntegrationError } from './sanitized-failure.ts';
 
 export interface SearchResult {
   title: string;
@@ -47,22 +47,28 @@ export class BraveSearchProvider implements SearchProvider {
     } catch (error) {
       throw sanitizedIntegrationError(error);
     }
-    if (!response.ok) throw failureForHttpStatus(response.status);
+    const responseDetails = safeBraveResponseDiagnostics(
+      response,
+      [query, this.apiKey].filter((value): value is string => Boolean(value)),
+    );
+    if (!response.ok) throw failureForHttpStatus(response.status, undefined, responseDetails);
     const contentType = response.headers.get('content-type') ?? '';
-    if (contentType && !contentType.toLowerCase().includes('json')) throw new SanitizedIntegrationError('invalid_content');
+    if (contentType && !contentType.toLowerCase().includes('json')) {
+      throw new SanitizedIntegrationError('invalid_content', responseDetails);
+    }
 
     let payload: unknown;
     try {
       payload = await response.json() as unknown;
     } catch {
-      throw new SanitizedIntegrationError('invalid_content');
+      throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-      throw new SanitizedIntegrationError('invalid_content');
+      throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
     const web = (payload as BraveResponse).web;
     if (typeof web !== 'object' || web === null || !Array.isArray(web.results)) {
-      throw new SanitizedIntegrationError('invalid_content');
+      throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
     return web.results.flatMap((result) => {
       if (typeof result.title !== 'string' || typeof result.url !== 'string' || typeof result.description !== 'string') return [];

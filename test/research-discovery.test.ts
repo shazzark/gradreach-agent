@@ -139,6 +139,9 @@ test('Brave failures record safe categories and redact keys, raw errors, and res
     await assert.rejects(provider.search('synthetic query'), (error: unknown) => {
       assert.ok(error instanceof SanitizedIntegrationError);
       assert.equal(error.failure.kind, kind);
+      assert.equal(error.failure.responseReceived, false);
+      assert.equal(error.failure.errorName, 'Error');
+      assert.equal(error.failure.causeCode, code);
       assert.equal(JSON.stringify(error.failure).includes(secret), false);
       assert.equal(error.message.includes(secret), false);
       return true;
@@ -154,9 +157,69 @@ test('Brave failures record safe categories and redact keys, raw errors, and res
     assert.deepEqual(error.failure, {
       kind: 'rate_limited',
       message: 'Remote service rate limited the request (HTTP 429).',
+      responseReceived: true,
       statusCode: 429,
     });
     assert.equal(JSON.stringify(error.failure).includes(secret), false);
+    return true;
+  });
+
+  const query = 'synthetic private query';
+  const causeProvider = new BraveSearchProvider(secret, async () => {
+    const cause = Object.assign(new Error(`private cause ${secret} ${query}`), { code: 'ECONNRESET' });
+    throw Object.assign(new TypeError(`fetch failed ${secret} ${query}`, { cause }), { code: `private-${secret}` });
+  });
+  await assert.rejects(causeProvider.search(query), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.deepEqual(error.failure, {
+      kind: 'network_error',
+      message: 'Network request failed.',
+      responseReceived: false,
+      errorName: 'TypeError',
+      causeCode: 'ECONNRESET',
+    });
+    const serialized = JSON.stringify(error.failure);
+    assert.equal(serialized.includes(secret), false);
+    assert.equal(serialized.includes(query), false);
+    assert.equal(serialized.includes('private cause'), false);
+    return true;
+  });
+
+  const responseMetadataProvider = new BraveSearchProvider(secret, async () => new Response(`private response ${secret} ${query}`, {
+    status: 403,
+    headers: {
+      'content-type': 'application/json',
+      'x-brave-error-code': 'SUBSCRIPTION_REQUIRED',
+      'x-brave-request-id': 'req_7f32a9',
+    },
+  }));
+  await assert.rejects(responseMetadataProvider.search(query), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.deepEqual(error.failure, {
+      kind: 'http_status',
+      message: 'Remote service returned HTTP 403.',
+      responseReceived: true,
+      statusCode: 403,
+      braveErrorCode: 'SUBSCRIPTION_REQUIRED',
+      requestId: 'req_7f32a9',
+    });
+    const serialized = JSON.stringify(error.failure);
+    assert.equal(serialized.includes(secret), false);
+    assert.equal(serialized.includes(query), false);
+    assert.equal(serialized.includes('private response'), false);
+    return true;
+  });
+
+  const echoedDiagnosticProvider = new BraveSearchProvider(secret, async () => new Response('private', {
+    status: 401,
+    headers: { 'x-request-id': `req-${secret}`, 'x-brave-error-code': 'synthetic private query' },
+  }));
+  await assert.rejects(echoedDiagnosticProvider.search(query), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.requestId, undefined);
+    assert.equal(error.failure.braveErrorCode, undefined);
+    assert.equal(JSON.stringify(error.failure).includes(secret), false);
+    assert.equal(JSON.stringify(error.failure).includes(query), false);
     return true;
   });
 
@@ -167,6 +230,8 @@ test('Brave failures record safe categories and redact keys, raw errors, and res
   await assert.rejects(invalidContentProvider.search('synthetic query'), (error: unknown) => {
     assert.ok(error instanceof SanitizedIntegrationError);
     assert.equal(error.failure.kind, 'invalid_content');
+    assert.equal(error.failure.responseReceived, true);
+    assert.equal(error.failure.statusCode, 200);
     assert.equal(JSON.stringify(safeFailureRecord(error)).includes(secret), false);
     return true;
   });

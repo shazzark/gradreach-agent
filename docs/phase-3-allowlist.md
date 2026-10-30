@@ -27,7 +27,9 @@ The existing safe page-fetch workflow processed the 12 saved leads sequentially.
 
 Search terms now include faculty, professor, supervisor, lab, laboratory, and research-group wording. The latest Thailand retry kept the three-result limit and returned sanitized `http_status` / HTTP 422. The three previously failed lead-page URLs were retried once each: both China pages succeeded; the Italy page at `https://www.polimi.it/formazione/formazione-oltre-la-laurea/master-universitari-e-corsi-post-laurea/dettaglio-master/3201` returned sanitized `http_status` / HTTP 404. The failed-page retry excerpts added 11 literal relevant snippets with source URLs and retrieval times.
 
-Failure records contain only a safe category, fixed message, HTTP status when present, and a query-free HTTPS resource path when applicable. They exclude raw exception text, API keys, response bodies, and search queries. Results remain unverified and unapproved; no email was sent.
+Failure records contain only a safe category, fixed message, response-received flag, HTTP status when present, and a query-free HTTPS resource path when applicable. Brave transport diagnostics may additionally contain an allowlisted error name/cause code and syntactically safe Brave error code/request ID headers. They exclude raw exception text, API keys, response bodies, and search queries. Results remain unverified and unapproved; no email was sent.
+
+After the four `network_error` search failures, one count-one connectivity-only Brave probe was made on 2026-10-30. The probe record was `responseReceived: false`, with no allowlisted transport code, Brave error code, or request ID available. Its cause remains undiagnosed. The probe did not retry the country searches or retain response content.
 
 ## Japan, South Korea, United States, and New Zealand pilot
 
