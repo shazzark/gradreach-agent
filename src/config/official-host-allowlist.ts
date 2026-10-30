@@ -11,7 +11,7 @@ export const OFFICIAL_HOSTS_BY_REGION = {
   ],
   'South Korea': ['cs.kaist.ac.kr'],
   'United States': ['siebelschool.illinois.edu'],
-  'New Zealand': ['www.cs.auckland.ac.nz', 'cs.auckland.ac.nz'],
+  'New Zealand': ['www.cs.auckland.ac.nz', 'cs.auckland.ac.nz', 'www.auckland.ac.nz'],
   Switzerland: ['inf.ethz.ch'],
   Portugal: ['tecnico.ulisboa.pt'],
   Italy: ['www.polimi.it'],
