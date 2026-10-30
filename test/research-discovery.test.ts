@@ -16,8 +16,16 @@ const profile = parseApplicantProfile({
   },
 });
 
-test('reviewed official-host allowlist contains only the verified Canadian university host', () => {
-  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION, { Canada: ['uwaterloo.ca'] });
+test('reviewed official-host allowlist contains only the verified exact university hosts', () => {
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION, {
+    Canada: ['uwaterloo.ca'],
+    Australia: ['www.sydney.edu.au'],
+    China: ['ac.cs.tsinghua.edu.cn'],
+    Thailand: ['math.sc.chula.ac.th'],
+    Europe: ['inf.ethz.ch'],
+    Portugal: ['tecnico.ulisboa.pt'],
+    Italy: ['www.polimi.it'],
+  });
 });
 
 test('discovery searches every configured region and persists official-host results as review-gated leads', async () => {
