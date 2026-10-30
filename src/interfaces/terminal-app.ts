@@ -8,6 +8,7 @@ import { planDailyOutreach } from '../application/daily-outreach-planner.ts';
 import { triageCandidateEvidence } from '../application/evidence-triage.ts';
 import { createGeminiOutreachDraft, createOutreachDraft } from '../application/outreach-draft.ts';
 import { approveCandidateForQueue } from '../application/outreach-review.ts';
+import { acceptDiscoveredProfessorLead, rejectDiscoveredProfessorLead } from '../application/discovery-lead-review.ts';
 import { parseApplicantProfile } from '../domain/applicant-profile.ts';
 import { markCandidateEvidenceReviewed } from '../application/research-discovery.ts';
 import { assessProgram, parseProgramRecord } from '../domain/program-assessment.ts';
@@ -49,7 +50,7 @@ async function run(): Promise<void> {
     const ask = (prompt: string) => readline.question(prompt);
 
     for (;;) {
-      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status\n14 Triage official evidence with Gemini  0 Exit\n');
+      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status\n14 Triage official evidence with Gemini  15 Accept or reject professor leads  0 Exit\n');
       const choice = (await ask('Choose an option: ')).trim();
       if (choice === '0') break;
 
@@ -233,6 +234,36 @@ async function run(): Promise<void> {
         for (const result of results) {
           stdout.write(`${terminalText(result.candidateId)} | ${result.recommendation}\n  ${terminalText(result.rationale)}\n`);
           for (const fact of result.facts) stdout.write(`  ${terminalText(fact.sourceUrl)}\n  "${terminalText(fact.quote)}"\n`);
+        }
+      } else if (choice === '15') {
+        const candidates = (await repositories.candidates.list()).filter((candidate) =>
+          candidate.leadType === 'professor_profile' && candidate.status === 'needs-evidence' && !candidate.discoveryReview,
+        );
+        if (!candidates.length) { stdout.write('No undecided professor leads need review.\n'); continue; }
+        for (const candidate of candidates) {
+          const profileEvidence = candidate.discoveryEvidence?.find((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl);
+          const contactEvidence = candidate.discoveryEvidence?.find((item) => item.kind === 'contact' && item.sourceUrl === candidate.emailSourceUrl);
+          const triage = await repositories.evidenceTriage.get(candidate.id);
+          stdout.write(`\n${terminalText(candidate.name)} | ${terminalText(candidate.id)}\n`);
+          stdout.write(`Institution: ${terminalText(candidate.institution || 'Unknown')} | Country: ${terminalText(candidate.country || 'Unknown')}\n`);
+          stdout.write(`Official professor source [${profileEvidence?.verification ?? 'unavailable'}]: ${terminalText(profileEvidence?.sourceUrl ?? candidate.officialProfileUrl ?? 'Unavailable')}\n`);
+          if (profileEvidence?.quote) stdout.write(`Supporting quote: "${terminalText(profileEvidence.quote)}"\n`);
+          else if (profileEvidence?.excerpt) stdout.write(`Supporting passage: "${terminalText(profileEvidence.excerpt)}"\n`);
+          if (candidate.officialEmail && contactEvidence) {
+            stdout.write(`Official email [${contactEvidence.verification}]: ${terminalText(candidate.officialEmail)}\nEmail source: ${terminalText(contactEvidence.sourceUrl)}\n`);
+          } else stdout.write('Official professor email: Not verified from a source-backed contact record.\n');
+          if (triage) stdout.write(`Saved triage recommendation (${triage.recommendation}; ${triage.triagedAt}): ${terminalText(triage.rationale)}\n`);
+          else stdout.write('Saved triage recommendation: None.\n');
+          stdout.write('Acceptance reviews the displayed professor profile and source-backed email, if present. It does not approve outreach.\n');
+          let decision = '';
+          while (decision !== 'a' && decision !== 'r') {
+            decision = (await ask('Accept or reject this lead? Type A or R: ')).trim().toLowerCase();
+          }
+          const reviewed = decision === 'a'
+            ? acceptDiscoveredProfessorLead(candidate)
+            : rejectDiscoveredProfessorLead(candidate);
+          await repositories.candidates.save(reviewed);
+          stdout.write(`Lead ${decision === 'a' ? 'accepted for further draft review' : 'rejected'}; no outreach was approved or sent.\n`);
         }
       } else {
         stdout.write('Unknown option.\n');

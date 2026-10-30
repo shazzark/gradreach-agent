@@ -45,7 +45,7 @@ The application uses only `https://www.googleapis.com/auth/gmail.send`, so it ca
 
 ### Local interface
 
-Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, capped queue-record preparation, reviewed program import, discovery evidence review, draft approval, and formula-safe CSV export. Discovery counts existing unique candidate IDs, excludes canonical source-URL duplicates, and stops immediately after reaching the configured target (capped at 200); the default target is 200. The dashboard shows the resulting progress. Running the application end to end requires a private profile and MongoDB configuration; that live flow remains unverified.
+Phase 7 provides a terminal dashboard, profile/priority changes, queue pause, capped queue-record preparation, reviewed program import, discovery evidence review, draft approval, and formula-safe CSV export. The professor-lead review view presents official profile evidence, any source-backed email, known institution/country, and separately stored triage rationale. A human must accept or reject each undecided professor lead; acceptance reviews only the displayed professor profile and source-backed email, and still does not approve outreach. Discovery counts existing unique candidate IDs, excludes canonical source-URL duplicates, and stops immediately after reaching the configured target (capped at 200); the default target is 200. The dashboard shows the resulting progress. Running the application end to end requires a private profile and MongoDB configuration; that live flow remains unverified.
 
 ## Environment variables
 

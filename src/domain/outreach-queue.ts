@@ -25,6 +25,8 @@ export interface ProfessorCandidate {
   eligibilitySourceUrl?: string;
   sourceCheckedAt?: string;
   discoveryEvidence?: DiscoveryEvidence[];
+  /** Human discovery decision; independent of evidence triage and outreach approval. */
+  discoveryReview?: { decision: 'accepted' | 'rejected'; reviewedAt: string };
   fitSummary?: string;
   personalizedDraft?: string;
   approvedDraftHash?: string;
