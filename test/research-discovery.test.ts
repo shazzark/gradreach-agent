@@ -79,6 +79,45 @@ test('discovery searches every configured region and persists official-host resu
   assert.ok(saved.every((candidate) => candidate.programUrl === undefined && candidate.officialEmail === undefined));
 });
 
+test('single-search region mode searches all reviewed hosts in one bounded query', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target,
+      countries: ['Country A'], fields: [], researchInterests: ['Computer Science'],
+    } },
+  });
+  const queried: Array<{ query: string; count: number | undefined }> = [];
+  const saved: ProfessorCandidate[] = [];
+  const result = await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search(query, options) {
+      queried.push({ query, count: options?.count });
+      return [
+        { title: 'First exact host', url: 'https://first.university.example.edu/people', excerpt: 'Official first host.' },
+        { title: 'Second exact host', url: 'https://second.university.example.edu/people', excerpt: 'Official second host.' },
+      ];
+    } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['first.university.example.edu', 'second.university.example.edu'] },
+      resultsPerQuery: 3,
+      oneSearchPerRegion: true,
+      fetchPage: async (url) => ({ url, html: '<p>Official HTML page</p>' }),
+    },
+  });
+  assert.equal(result.searches, 1);
+  assert.equal(result.saved, 2);
+  assert.deepEqual(queried, [{
+    query: '(site:first.university.example.edu OR site:second.university.example.edu) faculty professor supervisor lab laboratory research group Computer Science MSc Country A',
+    count: 3,
+  }]);
+  assert.deepEqual(saved.map((candidate) => candidate.institution), [
+    'first.university.example.edu', 'second.university.example.edu',
+  ]);
+  assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
+});
+
 test('discovery counts failed result checks without retaining result content', async () => {
   const singleCountryProfile = parseApplicantProfile({
     ...profile,

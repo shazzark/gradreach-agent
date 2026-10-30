@@ -23,6 +23,8 @@ export interface DiscoveryOptions {
   officialHostsByRegion: Record<string, string[]>;
   countryCodesByRegion?: Record<string, string>;
   resultsPerQuery?: number;
+  /** Combines a region's reviewed exact hosts into one bounded Brave request. */
+  oneSearchPerRegion?: boolean;
   targetPoolSize?: number;
   now?: () => Date;
   fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
@@ -84,8 +86,9 @@ export function extractOfficialPageExcerpt(html: string): string {
     .slice(0, 1200);
 }
 
-function queryFor(region: string, interest: string, host: string): string {
-  return `site:${host} faculty professor supervisor lab laboratory research group ${interest} MSc ${region}`.slice(0, 600);
+function queryFor(region: string, interest: string, hosts: string[]): string {
+  const siteFilter = hosts.length === 1 ? `site:${hosts[0]}` : `(${hosts.map((host) => `site:${host}`).join(' OR ')})`;
+  return `${siteFilter} faculty professor supervisor lab laboratory research group ${interest} MSc ${region}`.slice(0, 600);
 }
 
 function candidateFor(result: SearchResult, sourceUrl: string, region: string, query: string, retrievedAt: string): ProfessorCandidate {
@@ -282,9 +285,10 @@ export async function discoverProfessorCandidates(input: {
     const configuredHosts = input.options.officialHostsByRegion[region];
     if (!configuredHosts?.length) throw new Error(`No reviewed official institution hosts configured for region: ${region}`);
     const hosts = [...new Set(configuredHosts.map(normalizeHost))];
-    for (const host of hosts) {
+    const hostGroups = input.options.oneSearchPerRegion ? [hosts] : hosts.map((host) => [host]);
+    for (const matchingHosts of hostGroups) {
       for (const interest of interests) {
-        const query = queryFor(region, interest, host);
+        const query = queryFor(region, interest, matchingHosts);
         const recordRejection = async (checks: RejectedSearchResultChecks) => {
           await input.options.onRejectedResult?.(checks);
           await input.options.onResultDiagnostic?.({
@@ -307,7 +311,7 @@ export async function discoverProfessorCandidates(input: {
         const retrievedAt = (input.options.now?.() ?? new Date()).toISOString();
         for (const result of results) {
           const failedChecks = {
-            exactHost: !isAllowedOfficialUrl(result.url, hosts),
+            exactHost: !isAllowedOfficialUrl(result.url, matchingHosts),
             title: !result.title.trim(),
             excerpt: !result.excerpt.trim(),
             hostname: diagnosticResultHostname(result.url),
@@ -332,7 +336,7 @@ export async function discoverProfessorCandidates(input: {
             continue;
           }
           try {
-            await enrichOfficialCandidate(candidate, hosts, input.options);
+            await enrichOfficialCandidate(candidate, matchingHosts, input.options);
           } catch (error) {
             // A bad or unavailable official page rejects this lead, but should not discard later results.
             if (error instanceof SanitizedIntegrationError) {
