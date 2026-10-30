@@ -25,6 +25,8 @@ export interface DiscoveryOptions {
   resultsPerQuery?: number;
   /** Combines a region's reviewed exact hosts into one bounded Brave request. */
   oneSearchPerRegion?: boolean;
+  /** Stops after this many Brave requests; useful for a single bounded pilot. */
+  maxSearches?: number;
   targetPoolSize?: number;
   now?: () => Date;
   fetchPage?: (url: string) => Promise<{ url: string; html: string }>;
@@ -106,14 +108,70 @@ function candidateFor(result: SearchResult, sourceUrl: string, region: string, q
     id,
     // Search titles are leads, not confirmed people; review status and evidence label preserve that distinction.
     name: result.title || 'Unreviewed search result',
-    institution: new URL(sourceUrl).hostname,
-    country: region,
+    institution: '',
+    country: '',
+    leadType: 'discovery',
+    searchRegion: region,
     sourceCheckedAt: retrievedAt,
     discoveryEvidence: [evidence],
     status: 'needs-evidence',
     approvedForSending: false,
     priority: 0,
   };
+}
+
+const GENERIC_NAME_WORDS = new Set(['professor', 'faculty', 'staff', 'people', 'research', 'researcher', 'department', 'school', 'university', 'college', 'program', 'programme', 'laboratory', 'lab', 'center', 'centre', 'group', 'institute', 'computer', 'science', 'computing', 'cybersecurity', 'security', 'privacy', 'network', 'networks', 'system', 'systems', 'robotics', 'robot', 'robots', 'artificial', 'intelligence', 'machine', 'learning', 'software', 'engineering', 'cloud', 'distributed', 'autonomous', 'perception', 'contact', 'home']);
+const RESEARCH_SENTENCE = /\b(researches|studies|investigates|develops|explores|focuses|works?\s+on)\b/i;
+
+function pageHeading(html: string): string {
+  const heading = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1\s*>/i)?.[1];
+  return heading ? extractOfficialPageExcerpt(heading).split(/\s+(?:\||—|–|-)\s+/)[0]?.trim() ?? '' : '';
+}
+
+function plausiblePersonName(value: string): string | undefined {
+  const name = value.replace(/^(?:professor|prof\.?|dr\.?)\s+/i, '').trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (name.length > 100 || parts.length < 2 || parts.length > 4 ||
+      parts.some((part) => GENERIC_NAME_WORDS.has(part.toLowerCase()) || !/^[\p{L}][\p{L}.'’\-]*$/u.test(part))) return undefined;
+  return name;
+}
+
+function professorProfileEvidence(html: string): { name: string; quote: string } | undefined {
+  const name = plausiblePersonName(pageHeading(html));
+  if (!name) return undefined;
+  const excerpt = extractOfficialPageExcerpt(html);
+  if (!excerpt || !new RegExp(name.split(/\s+/).map(escapeRegex).join('\\s+'), 'i').test(excerpt)) return undefined;
+  const contentBlocks = [...html.matchAll(/<(p|li|blockquote)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)]
+    .map((match) => extractOfficialPageExcerpt(match[2] ?? ''));
+  const sentenceText = contentBlocks.length ? contentBlocks.join(' ') : excerpt;
+  const quote = sentenceText.split(/(?<=[.!?])\s+/).map((part) => part.trim())
+    .find((part) => part.length >= 50 && part.length <= 600 && /[.!?]$/.test(part) && RESEARCH_SENTENCE.test(part));
+  return quote && excerpt.includes(quote) ? { name, quote } : undefined;
+}
+
+function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/** Accepts only an address in a semantic block that explicitly names this person. */
+function explicitlyAssociatedEmail(html: string, personName: string): string | undefined {
+  const namePattern = new RegExp(`\\b${personName.split(/\s+/).map(escapeRegex).join('\\s+')}\\b`, 'i');
+  for (const match of html.matchAll(/<(section|article|tr|li|p|address|dd)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi)) {
+    const block = match[2] ?? '';
+    if (!namePattern.test(extractOfficialPageExcerpt(block))) continue;
+    const addresses = [...block.matchAll(/<a\b[^>]*href\s*=\s*(['"])mailto:([^'"?#]+)[^'"]*\1[^>]*>([\s\S]*?)<\/a\s*>/gi)]
+      .map((item) => decodeURIComponent(item[2] ?? '').trim())
+      .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    const unique = [...new Set(addresses)];
+    if (unique.length === 1) return unique[0];
+  }
+  return undefined;
+}
+
+function generalPageType(value: string, url: string): NonNullable<ProfessorCandidate['leadType']> {
+  const signal = `${value} ${new URL(url).pathname}`.toLowerCase();
+  if (/\b(program|programme|course|degree|study|graduate|master|msc)\b/.test(signal)) return 'program';
+  if (/\b(research[-_/ ]?(?:areas?|groups?|centres?|centers?|labs?|laboratories|institutes))\b/.test(signal)) return 'research_area';
+  if (/\b(school|department|faculty|college|university)\b/.test(signal)) return 'school';
+  return 'discovery';
 }
 
 function linksFromHtml(html: string, baseUrl: string, hosts: string[]): Array<{ url: string; text: string }> {
@@ -207,7 +265,24 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
   if (!resultUrl) return candidate;
   const page = await loadPage(resultUrl);
   const profileRetrievedAt = retrievedAt();
-  evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt: extractOfficialPageExcerpt(page.html), retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.country, query: 'Fetched from official search result URL; page type requires review' });
+  const excerpt = extractOfficialPageExcerpt(page.html);
+  const profile = professorProfileEvidence(page.html);
+  if (profile) {
+    candidate.name = profile.name;
+    candidate.leadType = 'professor_profile';
+    candidate.officialProfileUrl = page.url;
+    const email = explicitlyAssociatedEmail(page.html, profile.name);
+    if (email) {
+      candidate.officialEmail = email;
+      candidate.emailSourceUrl = page.url;
+      evidence.push({ kind: 'contact', sourceUrl: page.url, excerpt, retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.searchRegion ?? '', query: 'Official page explicitly associates this contact with the named profile' });
+    }
+    evidence.push({ kind: 'professor-profile', sourceUrl: page.url, excerpt, quote: profile.quote, retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.searchRegion ?? '', query: 'Fetched from exact allowlisted official profile URL; evidence remains unreviewed' });
+  } else {
+    candidate.name = pageHeading(page.html) || candidate.name;
+    candidate.leadType = generalPageType(candidate.name, page.url);
+    evidence.push({ kind: 'official-page', sourceUrl: page.url, excerpt, retrievedAt: profileRetrievedAt, verification: 'unverified', region: candidate.searchRegion ?? '', query: 'Fetched from exact allowlisted official result URL; page type remains unreviewed' });
+  }
   const chosen = new Map<'program' | 'contact', string>();
   for (const link of linksFromHtml(page.html, page.url, hosts)) {
     const kind = linkKind(link);
@@ -218,9 +293,20 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
     if (!url) continue;
     const linkedPage = await loadPage(url);
     const sourceUrl = linkedPage.url;
-    evidence.push({ kind, sourceUrl, excerpt: extractOfficialPageExcerpt(linkedPage.html), retrievedAt: retrievedAt(), verification: 'unverified', region: candidate.country, query: `Linked from ${page.url}` });
+    const linkedExcerpt = extractOfficialPageExcerpt(linkedPage.html);
+    const linkedAt = retrievedAt();
+    evidence.push({ kind, sourceUrl, excerpt: linkedExcerpt, retrievedAt: linkedAt, verification: 'unverified', region: candidate.searchRegion ?? '', query: `Linked from ${page.url}` });
     if (kind === 'program') candidate.programUrl = sourceUrl;
-    else candidate.officialContactUrl = sourceUrl;
+    else {
+      candidate.officialContactUrl = sourceUrl;
+      if (candidate.leadType === 'professor_profile') {
+        const email = explicitlyAssociatedEmail(linkedPage.html, candidate.name);
+        if (email) {
+          candidate.officialEmail = email;
+          candidate.emailSourceUrl = sourceUrl;
+        }
+      }
+    }
   }
   candidate.sourceCheckedAt = profileRetrievedAt;
   candidate.discoveryEvidence = evidence;
@@ -235,7 +321,7 @@ export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, rev
   if (evidence.length === 0 || evidence.some((item) => item.verification !== 'reviewed' && !reviewed.has(canonicalizeSourceUrl(item.sourceUrl)))) {
     throw new Error('Every discovery evidence source must be explicitly reviewed');
   }
-  if (!reviewed.has(profileUrl) || !evidence.some((item) => item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl)) {
+  if (!reviewed.has(profileUrl) || !evidence.some((item) => ['official-page', 'professor-profile'].includes(item.kind) && canonicalizeSourceUrl(item.sourceUrl) === profileUrl)) {
     throw new Error('The professor profile must be explicitly selected from a reviewed official page');
   }
   if (!reviewedProfessorName.trim()) throw new Error('A professor name confirmed from the reviewed profile is required');
@@ -246,6 +332,7 @@ export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, rev
   }));
   candidate.officialProfileUrl = profileUrl;
   candidate.name = reviewedProfessorName.trim();
+  candidate.leadType = 'professor_profile';
   if (candidate.status === 'needs-evidence') candidate.status = 'ready-for-review';
   return candidate;
 }
@@ -281,6 +368,8 @@ export async function discoverProfessorCandidates(input: {
   let rejected = 0;
   const rejectedByCheck = { exactHost: 0, title: 0, excerpt: 0 };
   const seenUrls = new Set<string>(knownUrls);
+  const maxSearches = input.options.maxSearches ?? Number.POSITIVE_INFINITY;
+  if (!(maxSearches === Number.POSITIVE_INFINITY || Number.isInteger(maxSearches) && maxSearches > 0)) throw new Error('maxSearches must be a positive integer');
   discovery: for (const region of regions) {
     const configuredHosts = input.options.officialHostsByRegion[region];
     if (!configuredHosts?.length) throw new Error(`No reviewed official institution hosts configured for region: ${region}`);
@@ -288,6 +377,7 @@ export async function discoverProfessorCandidates(input: {
     const hostGroups = input.options.oneSearchPerRegion ? [hosts] : hosts.map((host) => [host]);
     for (const matchingHosts of hostGroups) {
       for (const interest of interests) {
+        if (searches >= maxSearches) break discovery;
         const query = queryFor(region, interest, matchingHosts);
         const recordRejection = async (checks: RejectedSearchResultChecks) => {
           await input.options.onRejectedResult?.(checks);

@@ -70,7 +70,7 @@ export async function triageCandidateEvidence(input: {
   const prepared = input.candidates.map((candidate, index) => prepareLead(
     candidate,
     index + 1,
-    input.officialHostsByRegion[candidate.country] ?? [],
+    input.officialHostsByRegion[candidate.searchRegion ?? candidate.country] ?? [],
   ));
   const eligibleLeads = prepared.filter((lead) => lead.personName && lead.isProfessorProfile && lead.identityQuote && lead.researchQuote && lead.hasIdentityAndResearchOnSamePage);
   const localUnknowns = prepared.filter((lead) => !eligibleLeads.includes(lead)).map((lead) => localUncertain(lead));

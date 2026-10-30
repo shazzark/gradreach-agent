@@ -70,11 +70,14 @@ test('discovery searches every configured region and persists official-host resu
   assert.ok(queried.some((query) => query.includes('Country A')));
   assert.ok(queried.some((query) => query.includes('Country B')));
   assert.ok(queried.every((query) => query.includes('faculty professor supervisor lab laboratory research group')));
-  assert.deepEqual(saved.map((candidate) => candidate.country), ['Country A', 'Country B']);
+  assert.deepEqual(saved.map((candidate) => candidate.searchRegion), ['Country A', 'Country B']);
+  assert.ok(saved.every((candidate) => candidate.country === '' && candidate.institution === ''));
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
   assert.ok(saved.every((candidate) => candidate.officialProfileUrl === undefined));
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.verification === 'unverified'));
-  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.sourceUrl === `https://www.${candidate.country === 'Country A' ? 'countrya.edu' : 'countryb.ac.uk'}/people/professor`));
+  assert.deepEqual(saved.map((candidate) => candidate.discoveryEvidence?.[0]?.sourceUrl), [
+    'https://www.countrya.edu/people/professor', 'https://www.countryb.ac.uk/people/professor',
+  ]);
   assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.[0]?.retrievedAt === '2026-10-19T12:00:00.000Z'));
   assert.ok(saved.every((candidate) => candidate.programUrl === undefined && candidate.officialEmail === undefined));
 });
@@ -112,10 +115,26 @@ test('single-search region mode searches all reviewed hosts in one bounded query
     query: '(site:first.university.example.edu OR site:second.university.example.edu) faculty professor supervisor lab laboratory research group Computer Science MSc Country A',
     count: 3,
   }]);
-  assert.deepEqual(saved.map((candidate) => candidate.institution), [
-    'first.university.example.edu', 'second.university.example.edu',
-  ]);
+  assert.ok(saved.every((candidate) => candidate.institution === '' && candidate.country === ''));
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
+});
+
+test('maxSearches bounds the pilot to one request even when multiple interests are configured', async () => {
+  const multiInterestProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target, countries: ['Country A'], fields: ['Computer Science'], researchInterests: ['Cybersecurity', 'Robotics'],
+    } },
+  });
+  let calls = 0;
+  const result = await discoverProfessorCandidates({
+    profile: multiInterestProfile,
+    provider: { async search() { calls += 1; return []; } },
+    repository: { async list() { return []; }, async save() {} },
+    options: { officialHostsByRegion: { 'Country A': ['university.example.edu'] }, maxSearches: 1, resultsPerQuery: 3, oneSearchPerRegion: true },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.searches, 1);
 });
 
 test('discovery counts failed result checks without retaining result content', async () => {
@@ -573,6 +592,65 @@ test('official URL normalization, deduplication and fetched evidence stay unveri
   assert.ok(candidate.discoveryEvidence?.every((item) => item.verification === 'reviewed'));
   assert.ok(candidate.discoveryEvidence?.some((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl));
   assert.equal(candidate.approvedForSending, false);
+});
+
+test('only a named profile with substantive same-page research becomes a professor lead', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: { ...profile.applicant.target, countries: ['Country A'], fields: [], researchInterests: ['cybersecurity'] } },
+  });
+  const pages = new Map([
+    ['/people/ada', '<h1>Dr Ada Lovelace</h1><section><p>Dr Ada Lovelace researches cybersecurity and network security for resilient systems.</p><p>Dr Ada Lovelace: <a href="mailto:ada@example.edu">ada@example.edu</a></p></section>'],
+    ['/school', '<h1>School of Computing</h1><p>The school researches systems and supports a broad academic community.</p>'],
+    ['/programs/msc', '<h1>MSc Computer Science</h1><p>The programme offers graduate study in computing.</p>'],
+    ['/research-areas/robotics', '<h1>Robotics research areas</h1><p>The area supports research.</p>'],
+    ['/generic', '<h1>Professor Profile</h1><p>Professor Profile researches computer science across many areas.</p>'],
+    ['/research-labs/security', '<h1>Network Security Lab</h1><p>The Network Security Lab researches privacy-preserving systems for distributed environments.</p>'],
+    ['/missing', '<h1>Jane Doe</h1><p>Computer science at the university.</p>'],
+    ['/people/jane', '<h1>Jane Example</h1><p>Jane Example researches privacy-preserving network security methods across distributed systems.</p><footer><a href="mailto:unassociated@example.edu">Contact email</a></footer>'],
+  ]);
+  const saved: ProfessorCandidate[] = [];
+  await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [...pages.keys()].map((path) => ({ title: 'Search title', url: `https://university.example.edu${path}`, excerpt: 'Search snippet.' })); } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(structuredClone(candidate)); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] }, oneSearchPerRegion: true, resultsPerQuery: 3,
+      fetchPage: async (url) => ({ url, html: pages.get(new URL(url).pathname) ?? '' }),
+      now: () => new Date('2026-10-30T12:00:00.000Z'),
+    },
+  });
+  const namedProfile = saved.find((candidate) => candidate.officialProfileUrl?.endsWith('/people/ada'));
+  assert.ok(namedProfile);
+  assert.equal(namedProfile.leadType, 'professor_profile');
+  assert.equal(namedProfile.name, 'Ada Lovelace');
+  assert.equal(namedProfile.country, '');
+  assert.equal(namedProfile.institution, '');
+  assert.equal(namedProfile.searchRegion, 'Country A');
+  assert.equal(namedProfile.discoveryEvidence?.find((item) => item.kind === 'professor-profile')?.quote,
+    'Dr Ada Lovelace researches cybersecurity and network security for resilient systems.');
+  assert.equal(namedProfile.officialEmail, 'ada@example.edu');
+  assert.equal(namedProfile.emailSourceUrl, 'https://university.example.edu/people/ada');
+  assert.equal(namedProfile.status, 'needs-evidence');
+  assert.equal(namedProfile.approvedForSending, false);
+
+  const generic = saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith('/school')));
+  assert.equal(generic?.leadType, 'school');
+  assert.equal(generic?.officialProfileUrl, undefined);
+  assert.equal(generic?.officialEmail, undefined);
+  assert.equal(saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith('/programs/msc')))?.leadType, 'program');
+  assert.equal(saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith('/research-areas/robotics')))?.leadType, 'research_area');
+  assert.equal(saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith('/research-labs/security')))?.leadType, 'research_area');
+  for (const path of ['/generic', '/missing']) {
+    const falseProfile = saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith(path)));
+    assert.notEqual(falseProfile?.leadType, 'professor_profile');
+    assert.equal(falseProfile?.officialProfileUrl, undefined);
+  }
+  const unrelatedFooter = saved.find((candidate) => candidate.discoveryEvidence?.some((item) => item.sourceUrl.endsWith('/people/jane')));
+  assert.equal(unrelatedFooter?.leadType, 'professor_profile');
+  assert.equal(unrelatedFooter?.officialEmail, undefined);
+  assert.equal(unrelatedFooter?.emailSourceUrl, undefined);
+  assert.equal(saved.filter((candidate) => candidate.leadType === 'professor_profile').length, 2);
 });
 
 test('discovery stops exactly at the configured candidate target and skips canonical duplicates', async () => {

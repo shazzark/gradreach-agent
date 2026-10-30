@@ -12,6 +12,10 @@ export interface ProfessorCandidate {
   name: string;
   institution: string;
   country: string;
+  /** Discovery classification is optional so older saved leads remain readable. */
+  leadType?: 'professor_profile' | 'school' | 'program' | 'research_area' | 'discovery';
+  /** Search scope only; it does not assert the person's country or affiliation. */
+  searchRegion?: string;
   officialProfileUrl?: string;
   officialContactUrl?: string;
   officialEmail?: string;
@@ -39,6 +43,8 @@ export interface DiscoveryEvidence {
   verification: 'unverified' | 'reviewed';
   region: string;
   query: string;
+  /** Exact quote extracted from this same official page, when page checks support it. */
+  quote?: string;
 }
 
 export type EvidenceTriageRecommendation = 'likely relevant' | 'uncertain' | 'unlikely';
