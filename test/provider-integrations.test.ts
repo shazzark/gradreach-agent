@@ -63,6 +63,31 @@ test('Gmail OAuth rejects and does not store an expanded scope set', async () =>
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
+test('Gmail OAuth rejects an invalid callback state without exchanging or storing tokens', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-state-'));
+  const tokenPath = join(folder, 'tokens.json');
+  let exchanges = 0;
+  try {
+    const flow = await beginGmailAuthorization({
+      clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret', tokenPath,
+      fetchImpl: async () => {
+        exchanges += 1;
+        return Response.json({ access_token: 'synthetic-access-token', expires_in: 3600, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer' });
+      },
+    });
+    const url = new URL(flow.authorizationUrl);
+    const redirect = new URL(url.searchParams.get('redirect_uri')!);
+    const completionFailure = assert.rejects(flow.complete, /state was invalid/);
+    try {
+      const callbackResponse = await fetch(`${redirect.origin}/oauth2callback?code=synthetic-code&state=incorrect-state`);
+      assert.equal(callbackResponse.status, 400);
+      await completionFailure;
+      assert.equal(exchanges, 0);
+      await assert.rejects(readFile(tokenPath), { code: 'ENOENT' });
+    } finally { await flow.close(); }
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
 test('Gemini adapter uses its configured key without logging it and parses generated JSON', async () => {
   let requestBody = '';
   const provider = new GeminiDraftProvider({ apiKey: 'synthetic-api-key', model: 'test-model', fetchImpl: async (_input, init) => {
