@@ -13,6 +13,7 @@
     "test:watch": "node --experimental-strip-types --test --watch",
     "app": "node --experimental-strip-types src/interfaces/terminal-app.ts",
     "leads:view": "node --experimental-strip-types src/interfaces/view-undecided-professor-leads.ts",
+    "discovery:pilot": "node --experimental-strip-types src/interfaces/discover-professor-candidates.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",
     "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",
