@@ -6,6 +6,7 @@ import type { Document } from 'mongodb';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import { createPhase2Indexes, createPhase4Indexes, createRepositories } from '../src/infrastructure/mongo-storage.ts';
 import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-collection-migration.ts';
+import { safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
 import { assertMongoTestUri } from './mongo-test-uri.ts';
@@ -44,19 +45,24 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
   assertMongoTestUri(mongoUri!);
 
   const client = new MongoClient(mongoUri!);
+  let stage = 'client_connect';
   let db;
   try {
     await client.connect();
     db = client.db('gradreach_test');
+    stage = 'discovery_migration';
     await migrateDiscoveryCollections(db);
+    stage = 'index_creation';
     await createPhase2Indexes(db);
     await createPhase4Indexes(db);
     const repositories = createRepositories(db);
     const profile = parseApplicantProfile(JSON.parse(await readFile(examplePath, 'utf8')) as unknown);
 
+    stage = 'profile_storage';
     await repositories.profiles.save('synthetic-profile', profile);
     assert.deepEqual(await repositories.profiles.get('synthetic-profile'), profile);
 
+    stage = 'candidate_storage';
     await repositories.candidates.save(sampleCandidate('candidate-a', 'a@example.edu'));
     await repositories.candidates.save(sampleCandidate('candidate-b', 'b@example.edu'));
     assert.deepEqual((await repositories.candidates.list()).map((candidate) => candidate.id), ['candidate-a', 'candidate-b']);
@@ -67,6 +73,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     );
     assert.equal(await repositories.candidates.delete('candidate-a'), true);
 
+    stage = 'program_and_assessment_storage';
     await repositories.programs.save(sampleProgram);
     assert.deepEqual(await repositories.programs.get(sampleProgram.id), sampleProgram);
     assert.deepEqual(await repositories.programs.list(), [sampleProgram]);
@@ -74,6 +81,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     await repositories.assessments.save(sampleAssessment('2026-10-20T10:00:00Z'));
     assert.deepEqual(await repositories.assessments.latest(sampleProgram.id), sampleAssessment('2026-10-20T10:00:00.000Z'));
 
+    stage = 'scheduler_storage';
     const schedulerControl = { paused: true, timeZone: 'Africa/Lagos', dailyLimit: 5 };
     await repositories.schedulerControl.save(schedulerControl);
     assert.deepEqual(await repositories.schedulerControl.get(), schedulerControl);
@@ -84,6 +92,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-19T10:05:00Z'), false);
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-20T00:00:00Z'), true);
 
+    stage = 'attempt_storage';
     const attempt: OutreachAttempt = {
       candidateId: 'candidate-b',
       recipientEmail: 'b@example.edu',
@@ -105,6 +114,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
       /attempt.scheduledFor must be a valid date/,
     );
 
+    stage = 'privacy_and_index_assertions';
     const profileDocument = await db.collection<Document & { _id: string }>('applicant_profiles').findOne({ _id: 'synthetic-profile' });
     const candidateDocument = await db.collection<Document & { _id: string }>('discovery_leads').findOne({ _id: 'candidate-b' });
     assert.ok(profileDocument?.profile);
@@ -129,6 +139,19 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.profiles.delete('synthetic-profile'), true);
     assert.equal(await repositories.profiles.get('synthetic-profile'), undefined);
     assert.equal(await repositories.programs.delete(sampleProgram.id), true);
+  } catch (error) {
+    const failure = safeFailureRecord(error);
+    throw new Error(JSON.stringify({
+      stage,
+      kind: failure.kind,
+      ...(failure.errorName ? { errorName: failure.errorName } : {}),
+      ...(failure.codeName ? { codeName: failure.codeName } : {}),
+      ...(failure.errorCode ? { code: failure.errorCode } : {}),
+      ...(failure.causeName ? { causeName: failure.causeName } : {}),
+      ...(failure.causeCode ? { causeCode: failure.causeCode } : {}),
+      ...(failure.syscall ? { syscall: failure.syscall } : {}),
+      ...(failure.serverStates ? { serverStates: failure.serverStates } : {}),
+    }));
   } finally {
     if (db) {
       for (const collectionName of testCollections) {

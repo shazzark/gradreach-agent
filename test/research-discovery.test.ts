@@ -605,6 +605,45 @@ test('discovery summary separates duplicates, validation rejections, and officia
   assert.equal(JSON.stringify(diagnostics).includes('?token'), false);
 });
 
+test('professor discovery skips newsletter subscription links and keeps substantive same-page evidence', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target, countries: ['Country A'], fields: [], researchInterests: ['Distributed Systems'],
+    } },
+  });
+  const saved: ProfessorCandidate[] = [];
+  const fetched: string[] = [];
+  const result = await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [
+      { title: 'Professor Ada Example', url: 'https://university.example.edu/people/ada', excerpt: 'Official profile result.' },
+    ]; } },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] },
+      maxSearches: 1,
+      saveOnlyProfessorProfiles: true,
+      async fetchPage(url) {
+        fetched.push(url);
+        if (url.endsWith('/ci_mail/www/email/subscribe')) {
+          throw new SanitizedIntegrationError('http_status', { resourceUrl: url, statusCode: 500, responseReceived: true });
+        }
+        return { url, html: '<h1>Professor Ada Example</h1><p>Professor Ada Example studies distributed systems reliability and fault tolerance in large computing environments.</p><a href="/ci_mail/www/email/subscribe">Subscribe to email updates</a>' };
+      },
+    },
+  });
+
+  assert.deepEqual(fetched, ['https://university.example.edu/people/ada']);
+  assert.equal(result.saved, 1);
+  assert.equal(result.officialPageFetchFailures, 0);
+  assert.equal(saved[0]?.professorName, 'Ada Example');
+  assert.ok(saved[0]?.discoveryEvidence?.some((item) => item.kind === 'professor-profile' && item.quote?.includes('distributed systems')));
+  assert.equal(saved[0]?.status, 'needs-evidence');
+  assert.equal(saved[0]?.approvedForSending, false);
+  assert.equal(saved[0]?.officialEmail, undefined);
+});
+
 test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {
   const saved: ProfessorCandidate[] = [];
   const pages = new Map([

@@ -194,6 +194,7 @@ function linksFromHtml(html: string, baseUrl: string, hosts: string[]): Array<{ 
 
 function linkKind(link: { url: string; text: string }): 'program' | 'contact' | undefined {
   const signal = `${link.text} ${new URL(link.url).pathname}`.toLowerCase();
+  if (/\b(subscribe|unsubscribe|newsletter|mailing[-_ ]list)\b|(?:^|\/)ci_mail(?:\/|$)/.test(signal)) return undefined;
   if (/\b(contact|contact-us|contact details|email|reach me)\b/.test(signal)) return 'contact';
   if (/\b(program|programme|course|degree|study|graduate|master|msc)\b/.test(signal)) return 'program';
   return undefined;
