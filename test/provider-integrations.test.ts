@@ -88,6 +88,31 @@ test('Gmail OAuth rejects an invalid callback state without exchanging or storin
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
+test('Gmail OAuth token-exchange failure stores no token and hides provider response details', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-exchange-failure-'));
+  const tokenPath = join(folder, 'tokens.json');
+  const providerSecret = 'synthetic-provider-secret';
+  try {
+    const flow = await beginGmailAuthorization({
+      clientId: 'synthetic-client-id', clientSecret: providerSecret, tokenPath,
+      fetchImpl: async () => new Response(JSON.stringify({ error: 'invalid_grant', description: providerSecret }), { status: 400 }),
+    });
+    try {
+      const url = new URL(flow.authorizationUrl);
+      const redirect = new URL(url.searchParams.get('redirect_uri')!);
+      const completionFailure = assert.rejects(flow.complete, (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, 'Gmail OAuth token exchange failed with HTTP 400');
+        assert.equal(error.message.includes(providerSecret), false);
+        return true;
+      });
+      await fetch(`${redirect.origin}/oauth2callback?code=synthetic-code&state=${url.searchParams.get('state')}`);
+      await completionFailure;
+      await assert.rejects(readFile(tokenPath), { code: 'ENOENT' });
+    } finally { await flow.close(); }
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
 test('Gemini adapter uses its configured key without logging it and parses generated JSON', async () => {
   let requestBody = '';
   const provider = new GeminiDraftProvider({ apiKey: 'synthetic-api-key', model: 'test-model', fetchImpl: async (_input, init) => {

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../src/domain/outreach-queue.ts';
 import { draftFingerprint } from '../src/application/outreach-review.ts';
-import { GmailDeliveryError, GmailDeliveryService } from '../src/infrastructure/gmail-oauth.ts';
+import { GMAIL_SEND_SCOPE, GmailDeliveryError, GmailDeliveryService } from '../src/infrastructure/gmail-oauth.ts';
 
 const profileUrl = 'https://university.example.edu/profile';
 const contactUrl = 'https://university.example.edu/contact';
@@ -100,6 +103,55 @@ test('delivery is disabled by default and never calls the provider', async () =>
   const service = new GmailDeliveryService({ repositories: store.repositories, send: async () => { sends += 1; return 'synthetic-id'; }, sendingEnabled: false });
   assert.equal((await service.deliverNext('2026-10-20T09:00:00.000Z')).status, 'disabled');
   assert.equal(sends, 0);
+});
+
+test('Gmail adapter sends the approved draft through the send-only endpoint using mock transport', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'gradreach-gmail-send-'));
+  const tokenPath = join(folder, 'tokens.json');
+  const prior = {
+    clientId: process.env.EMAIL_PROVIDER_CLIENT_ID,
+    clientSecret: process.env.EMAIL_PROVIDER_CLIENT_SECRET,
+    tokenPath: process.env.EMAIL_PROVIDER_TOKEN_PATH,
+  };
+  const previousFetch = globalThis.fetch;
+  let requestCount = 0;
+  try {
+    process.env.EMAIL_PROVIDER_CLIENT_ID = 'synthetic-client-id';
+    process.env.EMAIL_PROVIDER_CLIENT_SECRET = 'synthetic-client-secret';
+    process.env.EMAIL_PROVIDER_TOKEN_PATH = tokenPath;
+    await writeFile(tokenPath, JSON.stringify({
+      access_token: 'synthetic-access-token', expires_at: Date.now() + 60 * 60 * 1000,
+      scope: GMAIL_SEND_SCOPE, token_type: 'Bearer',
+    }));
+    globalThis.fetch = (async (input, init) => {
+      requestCount += 1;
+      assert.equal(String(input), 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer synthetic-access-token');
+      const payload = JSON.parse(String(init?.body)) as { raw: string };
+      const mime = Buffer.from(payload.raw, 'base64url').toString('utf8');
+      assert.match(mime, /To: p1@example\.edu/);
+      assert.match(mime, /Subject: =\?UTF-8\?B\?/);
+      assert.match(mime, /The group studies resilient distributed systems\./);
+      return Response.json({ id: 'synthetic-provider-message-id' });
+    }) as typeof fetch;
+
+    const store = new MemoryDeliveryStore();
+    store.add('p1');
+    const service = new GmailDeliveryService({ repositories: store.repositories, sendingEnabled: true });
+    const result = await service.deliverNext('2026-10-20T09:00:00.000Z');
+    assert.equal(result.status, 'delivered');
+    assert.equal(store.attempts[0]?.providerMessageId, 'synthetic-provider-message-id');
+    assert.equal(requestCount, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (prior.clientId === undefined) delete process.env.EMAIL_PROVIDER_CLIENT_ID;
+    else process.env.EMAIL_PROVIDER_CLIENT_ID = prior.clientId;
+    if (prior.clientSecret === undefined) delete process.env.EMAIL_PROVIDER_CLIENT_SECRET;
+    else process.env.EMAIL_PROVIDER_CLIENT_SECRET = prior.clientSecret;
+    if (prior.tokenPath === undefined) delete process.env.EMAIL_PROVIDER_TOKEN_PATH;
+    else process.env.EMAIL_PROVIDER_TOKEN_PATH = prior.tokenPath;
+    await rm(folder, { recursive: true, force: true });
+  }
 });
 
 test('delivery requires explicit candidate approval and an unchanged approved draft', async () => {

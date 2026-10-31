@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { buildDashboardSnapshot, candidatesToCsv } from '../application/dashboard.ts';
+import { browseLeadsByDiscoveryRegion } from '../application/country-lead-browser.ts';
 import { planDailyOutreach } from '../application/daily-outreach-planner.ts';
 import { triageCandidateEvidence } from '../application/evidence-triage.ts';
 import { createGeminiOutreachDraft, createOutreachDraft } from '../application/outreach-draft.ts';
@@ -50,7 +51,7 @@ async function run(): Promise<void> {
     const ask = (prompt: string) => readline.question(prompt);
 
     for (;;) {
-      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status\n14 Triage official evidence with Gemini  15 Accept or reject professor leads  0 Exit\n');
+      stdout.write('\nGradReach local dashboard\n1 Dashboard  2 Review evidence  3 Set candidate priority\n4 Edit target profile  5 Pause/resume queue  6 Prepare daily queue\n7 Export candidates CSV  8 Import and assess reviewed program JSON\n9 Review a discovery lead  10 Prepare template draft  11 Approve draft for queue\n12 Generate draft with Gemini  13 Record manual reply/follow-up status\n14 Triage official evidence with Gemini  15 Accept or reject professor leads\n16 Browse leads by discovery country  0 Exit\n');
       const choice = (await ask('Choose an option: ')).trim();
       if (choice === '0') break;
 
@@ -264,6 +265,26 @@ async function run(): Promise<void> {
             : rejectDiscoveredProfessorLead(candidate);
           await repositories.candidates.save(reviewed);
           stdout.write(`Lead ${decision === 'a' ? 'accepted for further draft review' : 'rejected'}; no outreach was approved or sent.\n`);
+        }
+      } else if (choice === '16') {
+        const regions = profile.applicant.target.countries;
+        if (!regions.length) { stdout.write('No target countries are configured in the private profile.\n'); continue; }
+        regions.forEach((region, index) => stdout.write(`${index + 1}. ${terminalText(region)}\n`));
+        const selection = Number((await ask('Discovery country number: ')).trim()) - 1;
+        const region = regions[selection];
+        if (!region) { stdout.write('Select a listed country number.\n'); continue; }
+        const result = browseLeadsByDiscoveryRegion(await repositories.candidates.list(), region);
+        stdout.write(`Leads found for discovery region ${terminalText(result.region)}. Search region does not establish professor country or affiliation.\n`);
+        stdout.write(`Named individual professor profiles: ${result.professors.length}\n`);
+        for (const candidate of result.professors) {
+          stdout.write(`Professor: ${terminalText(candidate.professorName!)} | Lead/page title: ${terminalText(candidate.name)} | Institution: ${terminalText(candidate.institution || 'Unknown')} | Country: ${terminalText(candidate.country || 'Unknown')} | ${candidate.status}\n`);
+          stdout.write(`  Official profile: ${terminalText(candidate.officialProfileUrl!)}\n`);
+        }
+        stdout.write(`General or unclassified leads: ${result.general.length}\n`);
+        for (const candidate of result.general) {
+          const source = candidate.discoveryEvidence?.[0]?.sourceUrl ?? candidate.officialProfileUrl ?? candidate.programUrl ?? 'Unavailable';
+          stdout.write(`Lead/page title: ${terminalText(candidate.name)} | Professor: Not established | Type: ${candidate.leadType ?? 'unclassified'} | Country: ${terminalText(candidate.country || 'Unknown')} | ${candidate.status}\n`);
+          stdout.write(`  Source: ${terminalText(source)}\n`);
         }
       } else {
         stdout.write('Unknown option.\n');
