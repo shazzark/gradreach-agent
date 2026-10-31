@@ -18,6 +18,7 @@ import { safeFailureRecord, SanitizedIntegrationError } from '../infrastructure/
 export type DiscoveryRegion = keyof typeof OFFICIAL_HOSTS_BY_REGION;
 
 const COUNTRY_CODES_BY_REGION: Record<DiscoveryRegion, string> = {
+  Belgium: 'BE',
   Australia: 'AU',
   Canada: 'CA',
   China: 'CN',

@@ -1,5 +1,6 @@
 // Exact official university hosts checked on university pages; see docs/phase-3-allowlist.md for evidence.
 export const OFFICIAL_HOSTS_BY_REGION = {
+  Belgium: ['eng.kuleuven.be'],
   Canada: ['uwaterloo.ca'],
   Australia: ['www.sydney.edu.au'],
   China: ['ac.cs.tsinghua.edu.cn'],

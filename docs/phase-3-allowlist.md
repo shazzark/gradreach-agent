@@ -4,6 +4,7 @@ Each active entry is an exact HTTPS hostname taken from a university page that s
 
 | Profile region | University | Exact allowed host | Official university source | Fit shown on source |
 | --- | --- | --- | --- | --- |
+| Belgium | KU Leuven, Faculty of Engineering Science | `eng.kuleuven.be` | [Master of Engineering: Computer Science](https://eng.kuleuven.be/en/study/masters/computer-science) | Official page lists the Computer Science master's, supervised thesis work, and distributed systems, secure software, AI, and software engineering options. Checked 2026-10-31 |
 | Canada | University of Waterloo | `uwaterloo.ca` | [Cybersecurity and Privacy Institute: Students](https://uwaterloo.ca/cybersecurity-privacy-institute/students) | Graduate research in cybersecurity, privacy, and network security |
 | Australia | The University of Sydney | `www.sydney.edu.au` | [Master of Computer Science](https://www.sydney.edu.au/courses/courses/pc/master-of-computer-science.html) | MSc Computer Science with cybersecurity, AI, networks and distributed systems, and software engineering specialisations |
 | China | Tsinghua University | `ac.cs.tsinghua.edu.cn` | [PhD and Master in Advanced Computing](https://ac.cs.tsinghua.edu.cn/application.html) | Graduate study in the Department of Computer Science and Technology, including 2027 enrollment information |
@@ -20,7 +21,7 @@ Each active entry is an exact HTTPS hostname taken from a university page that s
 | Portugal | Técnico Lisboa, University of Lisbon | `tecnico.ulisboa.pt` | [Telecommunications and Informatics Engineering](https://tecnico.ulisboa.pt/en/education/courses/masters-programmes/telecommunications-and-informatics-engineering/) | MSc covering distributed systems, network management, Internet security, AI-enabled networks, and computing |
 | Italy | Politecnico di Milano | `www.polimi.it` | [Computer Science and Engineering](https://www.polimi.it/en/education/laurea-programmes/programme-detail/computer-science-and-engineering) | Current official MSc programme page; covers the active Computer Science target |
 
-Ten active countries have verified exact hosts: Australia, Canada, China, Italy, Japan, New Zealand, Portugal, South Korea, Switzerland, and the United States. Search findings are stored locally under the ignored `outputs/` directory. They remain unverified leads and require human source review before any candidate approval. Thailand is no longer an active target; its former host is retained only as historical pilot evidence below.
+Eleven active countries have verified exact hosts: Australia, Belgium, Canada, China, Italy, Japan, New Zealand, Portugal, South Korea, Switzerland, and the United States. Search findings are stored locally under the ignored `outputs/` directory. They remain unverified leads and require human source review before any candidate approval. Thailand is no longer an active target; its former host is retained only as historical pilot evidence below.
 
 ## Bounded Brave pilot
 

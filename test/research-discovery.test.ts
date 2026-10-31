@@ -19,6 +19,7 @@ const profile = parseApplicantProfile({
 
 test('reviewed official-host allowlist contains only the verified exact university hosts', () => {
   assert.deepEqual(OFFICIAL_HOSTS_BY_REGION, {
+    Belgium: ['eng.kuleuven.be'],
     Canada: ['uwaterloo.ca'],
     Australia: ['www.sydney.edu.au'],
     China: ['ac.cs.tsinghua.edu.cn'],
