@@ -1,5 +1,3 @@
-import './local-env.ts';
-
 export interface DraftGenerationInput {
   applicantName: string;
   academicBackground: string;

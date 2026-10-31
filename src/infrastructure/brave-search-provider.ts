@@ -1,4 +1,3 @@
-import './local-env.ts';
 import { failureForHttpStatus, safeBraveResponseDiagnostics, sanitizedIntegrationError, SanitizedIntegrationError } from './sanitized-failure.ts';
 
 export interface SearchResult {

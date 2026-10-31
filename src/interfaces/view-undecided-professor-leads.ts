@@ -1,3 +1,4 @@
+import '../infrastructure/local-env.ts';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { CandidateEvidenceTriage, ProfessorCandidate } from '../domain/outreach-queue.ts';

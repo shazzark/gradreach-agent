@@ -1,4 +1,3 @@
-import './local-env.ts';
 import { MongoClient } from 'mongodb';
 import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';

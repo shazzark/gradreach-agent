@@ -4,12 +4,12 @@ Local research and outreach assistance for the 2027 international MSc applicatio
 
 ## Current status
 
-The core, discovery fixtures, program assessment, source-cited drafts, dashboard, and provider adapters have automated tests. Live Brave search and Gemini could not be verified because network fetches failed. MongoDB integration was skipped because `MONGODB_TEST_URI` is not configured. The delivery path has deterministic mocked Gmail tests for approval checks, retries, pause, idempotency and concurrent cap enforcement; no account was authorized and no email was sent. See [the phase plan](docs/implementation-plan.md) for exact status.
+The core, discovery fixtures, program assessment, source-cited drafts, country lead browser, and provider adapters have automated tests. Live Brave search and Gemini could not be verified because network fetches failed. The owner reported that `npm run test:mongodb` passed from normal Windows PowerShell on 2026-10-31 (one test passed, none failed or skipped); it is not rerun inside the restricted Codex sandbox. Gmail OAuth and delivery are tested with mocked provider responses; no account was authorized and no email was sent. See [the phase plan](docs/implementation-plan.md) for exact status.
 
 ## Requirements and local checks
 
 - Node.js 22 or newer
-- MongoDB for the local dashboard and persistence
+- MongoDB for the private website and persistence
 
 ```bash
 npm install
@@ -18,7 +18,7 @@ npm run typecheck
 npm run build
 ```
 
-Run `npm run test:mongodb` only after setting `MONGODB_TEST_URI` to a disposable test deployment. Each run creates a uniquely named test database and drops only that database. Never point it at personal or production data. `MONGODB_URI` configures the application; `MONGODB_DATABASE` optionally selects its database. `npm run db:indexes` creates indexes in the configured application database and should only be run after checking that target.
+`npm run test:mongodb` requires `MONGODB_TEST_URI` to parse to exactly `gradreach_test` on a disposable test deployment. It migrates legacy discovery collection names if present, writes synthetic fixtures, and drops only its nine named collections in that database. It does not create a unique database or drop the database itself. Never point it at personal or production data. `MONGODB_URI` configures the application; `MONGODB_DATABASE` optionally selects its database. `npm run db:indexes` creates indexes in the configured application database and should only be run after checking that target.
 
 ## Discovery collection rename
 
@@ -36,22 +36,28 @@ Copy `.env.example` to `.env` for local settings. Process environment variables 
 - `EMAIL_PROVIDER_CLIENT_ID`, `EMAIL_PROVIDER_CLIENT_SECRET`, and optional `EMAIL_PROVIDER_TOKEN_PATH` for Gmail OAuth
 - `OUTREACH_SENDING_ENABLED`, which must be exactly `true` to opt the scheduler into sending; keep it unset or false during development
 - `GRADREACH_PROFILE_PATH` for the private profile location
+- `GRADREACH_OWNER_EMAIL` exact owner Google account email for the private website; required and fail-closed
+- `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, and `AUTH_SECRET` for website identity and signed sessions
+- `AUTH_TRUST_HOST=true` when running behind the configured trusted hosting proxy; sign-in stays unavailable without it
+- `AUTH_URL` for the exact deployed HTTPS origin (see [private deployment setup](docs/private-website-deployment.md))
 
 Never print or commit `.env`, API keys, OAuth client material, access/refresh tokens, private profiles, personal documents, or email contents. These are excluded by `.gitignore`. The default Gmail token file is `private-data/gmail-token.json`, protected with a current-user-only ACL on Windows and owner-only mode on other platforms.
 
-## Research and dashboard
+## Research and private website
 
-Phase 3 requires a Brave API key and reviewed exact-host allowlists for every configured country. Search results stay unverified until a human reviews official sources. Program assessment never converts GPA scales or assumes funding/affordability. Choose **Generate draft with Gemini** in the dashboard to send the selected candidate name, applicant name and degree, target interest/intake, verified excerpt, and source URL to Gemini; no transcript/CV is sent. Gemini output remains a draft and must pass source/excerpt validation and human approval. The deterministic template option does not call Gemini.
+Phase 3 requires a Brave API key and reviewed exact-host allowlists for every configured country. Search results stay unverified until a human reviews official sources. Program assessment never converts GPA scales or assumes funding/affordability. The website can optionally send selected bounded official excerpts and configured research interests to Gemini for evidence triage when the owner explicitly submits that action. Recommendations remain advisory. Drafts use the deterministic source-cited template and must pass evidence checks and explicit human approval.
 
-To run the dashboard, set `MONGODB_URI`, create the private profile, run `npm run db:indexes` after verifying the target database, then run:
+For local development, configure the server-side website settings and `MONGODB_URI`, ensure the `primary` applicant profile exists in `gradreach`, then run:
 
 ```bash
-npm run app
+npm run dev
 ```
 
-To view undecided professor leads without starting the dashboard, run `npm run leads:view`. This standalone command reads candidate and saved triage records only; it does not load or save the private profile, update scheduler state, or call a search, AI, or email provider.
+Phase 7 is a private Next.js App Router website. Google OIDC accepts only the verified account whose exact email matches `GRADREACH_OWNER_EMAIL`; there is no signup or invitation path. Proxy checks are backed by page-layout, server-action, and database-repository authorization checks. The website reuses existing MongoDB repositories and application services for country-grouped discovery, evidence review and optional AI recommendations, program assessment, profile settings, source-cited drafts, explicit draft approval, queue planning, pause controls, and status tracking. Search and Gemini calls require an explicit owner action; neither runs on page load. Website sign-in does not authorize Gmail. No website action directly sends email.
 
-The terminal dashboard reviews evidence and drafts, imports reviewed program JSON, controls pause state, prepares capped queue records, records manual reply/follow-up statuses, and exports candidates to CSV. Discovery stops adding candidates at its configurable target (default 200, maximum 200).
+Build and run the production server with `npm run build` and `npm run start`. The owner-only hosting, Google OAuth, private environment variables, Atlas egress, and deployment steps are documented in [docs/private-website-deployment.md](docs/private-website-deployment.md). The app is prepared for deployment but has not been published. The older `npm run app` terminal utility remains available for local operations and profile initialization.
+
+To view undecided professor leads without starting the website, run `npm run leads:view`. This standalone command reads candidate and saved triage records only; it does not load or save the private profile, update scheduler state, or call a search, AI, or email provider. Discovery stops adding candidates at its configurable target (default 200, maximum 200).
 
 ## Gmail OAuth setup
 

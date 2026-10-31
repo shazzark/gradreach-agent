@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import '../src/infrastructure/local-env.ts';
 import { MongoClient } from 'mongodb';
 import type { Document } from 'mongodb';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
@@ -9,9 +10,9 @@ import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-col
 import { safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
-import { assertMongoTestUri } from './mongo-test-uri.ts';
+import { assertMongoTestUri, getEnabledMongoTestUri } from './mongo-test-uri.ts';
 
-const mongoUri = process.env.MONGODB_TEST_URI;
+const mongoUri = getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEGRATION, uri: process.env.MONGODB_TEST_URI });
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
   'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',

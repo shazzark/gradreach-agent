@@ -9,13 +9,16 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test",
-    "test:mongodb": "node --experimental-strip-types --test test/mongo-storage.integration.test.ts",
+    "test:mongodb": "node --experimental-strip-types --import ./scripts/enable-mongodb-integration.ts --test test/mongo-storage.integration.test.ts",
     "test:watch": "node --experimental-strip-types --test --watch",
     "app": "node --experimental-strip-types src/interfaces/terminal-app.ts",
+    "dev": "next dev",
+    "web": "next dev",
+    "start": "next start",
     "leads:view": "node --experimental-strip-types src/interfaces/view-undecided-professor-leads.ts",
     "discovery:pilot": "node --experimental-strip-types src/interfaces/discover-professor-candidates.ts",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck",
+    "build": "npm run typecheck && next build",
     "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",
     "db:migrate-discovery": "node --experimental-strip-types src/interfaces/migrate-discovery-collections.ts",
     "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts",
@@ -23,9 +26,15 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "mongodb": "^7.7.0"
+    "mongodb": "^7.7.0",
+    "next": "^16.4.3",
+    "next-auth": "^5.0.0-beta.32",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   }
 }

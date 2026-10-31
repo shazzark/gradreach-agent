@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertMongoTestUri } from './mongo-test-uri.ts';
+import { assertMongoTestUri, getEnabledMongoTestUri } from './mongo-test-uri.ts';
 
 const username = 'synthetic-user';
 const password = 'synthetic-password';
@@ -8,6 +8,12 @@ const password = 'synthetic-password';
 test('accepts standard MongoDB URIs with multiple hosts and the exact test database', () => {
   const uri = `mongodb://${username}:${password}@shard-a.example.net:27017,shard-b.example.net:27017,shard-c.example.net:27017/gradreach_test?replicaSet=rs0&authSource=admin&tls=true`;
   assert.doesNotThrow(() => assertMongoTestUri(uri));
+});
+
+test('Mongo integration stays disabled unless the explicit test command opts in', () => {
+  assert.equal(getEnabledMongoTestUri({ enabled: undefined, uri: 'mongodb://test.example/gradreach_test' }), undefined);
+  assert.equal(getEnabledMongoTestUri({ enabled: 'false', uri: 'mongodb://test.example/gradreach_test' }), undefined);
+  assert.equal(getEnabledMongoTestUri({ enabled: 'true', uri: 'mongodb://test.example/gradreach_test' }), 'mongodb://test.example/gradreach_test');
 });
 
 test('accepts MongoDB SRV URIs with the exact test database without DNS lookup', () => {

@@ -1,5 +1,9 @@
 import { MongoClient } from 'mongodb';
 
+export function getEnabledMongoTestUri(input: { enabled: string | undefined; uri: string | undefined }): string | undefined {
+  return input.enabled === 'true' ? input.uri : undefined;
+}
+
 const EXPECTED_TEST_DATABASE = 'gradreach_test';
 
 /** Validates through the MongoDB driver without connecting or echoing the supplied URI. */
