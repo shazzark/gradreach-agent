@@ -39,7 +39,7 @@ export function createOutreachDraft(input: {
   if (!candidate.officialProfileUrl || candidate.status !== 'ready-for-review') {
     throw new Error('A reviewed professor profile is required before drafting');
   }
-  const professorName = cleanLine(candidate.name);
+  const professorName = cleanLine(candidate.professorName ?? '');
   const institution = cleanLine(candidate.institution);
   if (!professorName || !institution) throw new Error('Reviewed professor name and institution are required before drafting');
   const source = candidate.discoveryEvidence?.find((item) => item.kind === 'professor-profile' && item.verification === 'reviewed' && item.sourceUrl === input.researchSourceUrl);
@@ -132,7 +132,7 @@ export async function createGeminiOutreachDraft(input: {
     applicantName: input.profile.applicant.fullName,
     academicBackground: [input.profile.applicant.degree.title, input.profile.applicant.degree.institution].filter(Boolean).join(' at ') || 'Not provided',
     interest,
-    professorName: input.candidate.name,
+    professorName: input.candidate.professorName ?? '',
     institution: input.candidate.institution,
     verifiedExcerpt: base.personalizationExcerpt,
     sourceUrl: base.personalizationSourceUrl,

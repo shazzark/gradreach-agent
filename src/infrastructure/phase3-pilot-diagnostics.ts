@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 
 const REJECTION_REASONS = new Set([
   'exact_host', 'title', 'excerpt', 'timeout', 'dns_tls', 'rate_limited', 'http_status',
-  'rejected_redirect', 'disallowed_host', 'invalid_content', 'network_error', 'invalid_request', 'missing_configuration',
+  'rejected_redirect', 'disallowed_host', 'invalid_content', 'network_error', 'mongodb_server_error', 'invalid_request', 'missing_configuration', 'not_professor_profile',
 ]);
 
 export type Phase3ResultDiagnostic = {

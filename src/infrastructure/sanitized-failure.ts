@@ -7,8 +7,15 @@ export type SafeFailureKind =
   | 'disallowed_host'
   | 'invalid_content'
   | 'network_error'
+  | 'mongodb_server_error'
   | 'invalid_request'
   | 'missing_configuration';
+
+export type AtlasErrorCategory =
+  | 'authentication_failed'
+  | 'authorization_denied'
+  | 'network_access_denied'
+  | 'other_atlas_error';
 
 export interface SafeFailureRecord {
   kind: SafeFailureKind;
@@ -21,7 +28,13 @@ export interface SafeFailureRecord {
   contentTypeIsHtml?: boolean | null;
   bodyEmpty?: boolean | null;
   errorName?: string;
+  codeName?: string;
+  errorCode?: string;
+  atlasCategory?: AtlasErrorCategory;
+  causeName?: string;
   causeCode?: string;
+  syscall?: string;
+  serverStates?: string[];
   braveErrorCode?: string;
   requestId?: string;
 }
@@ -44,6 +57,7 @@ const FAILURE_MESSAGES: Record<SafeFailureKind, string> = {
   disallowed_host: 'URL host is not in the exact official host allowlist.',
   invalid_content: 'Response content was invalid for the requested operation.',
   network_error: 'Network request failed.',
+  mongodb_server_error: 'MongoDB server returned an error.',
   invalid_request: 'Request parameters are invalid.',
   missing_configuration: 'SEARCH_PROVIDER_API_KEY must be configured to use web discovery.',
 };
@@ -56,7 +70,13 @@ export class SanitizedIntegrationError extends Error {
     resourceUrl?: string;
     responseReceived?: boolean;
     errorName?: string;
+    codeName?: string;
+    errorCode?: string;
+    atlasCategory?: AtlasErrorCategory;
+    causeName?: string;
     causeCode?: string;
+    syscall?: string;
+    serverStates?: string[];
     braveErrorCode?: string;
     requestId?: string;
     contentTypeIsHtml?: boolean | null;
@@ -70,7 +90,13 @@ export class SanitizedIntegrationError extends Error {
     const resourceUrl = sanitizeResourceUrl(options.resourceUrl);
     const resourceLocation = resourceParts(resourceUrl);
     const errorName = sanitizeErrorName(options.errorName);
+    const codeName = sanitizeMongoCodeName(options.codeName);
+    const errorCode = sanitizeDiagnosticCode(options.errorCode);
+    const atlasCategory = sanitizeAtlasErrorCategory(options.atlasCategory);
+    const causeName = sanitizeErrorName(options.causeName);
     const causeCode = sanitizeTransportCode(options.causeCode);
+    const syscall = sanitizeSyscall(options.syscall);
+    const serverStates = sanitizeServerStates(options.serverStates);
     const braveErrorCode = sanitizeIdentifier(options.braveErrorCode);
     const requestId = sanitizeIdentifier(options.requestId);
     const message = kind === 'http_status' && statusCode
@@ -93,7 +119,13 @@ export class SanitizedIntegrationError extends Error {
         bodyEmpty: options.bodyEmpty ?? null,
       } : {}),
       ...(errorName ? { errorName } : {}),
+      ...(codeName ? { codeName } : {}),
+      ...(errorCode ? { errorCode } : {}),
+      ...(atlasCategory ? { atlasCategory } : {}),
+      ...(causeName ? { causeName } : {}),
       ...(causeCode ? { causeCode } : {}),
+      ...(syscall ? { syscall } : {}),
+      ...(serverStates ? { serverStates } : {}),
       ...(braveErrorCode ? { braveErrorCode } : {}),
       ...(requestId ? { requestId } : {}),
     };
@@ -111,8 +143,14 @@ export function safeFailureRecord(error: unknown, resourceUrl?: string): SafeFai
 
   const details = collectErrorDetails(error);
   const signals = details.codes;
-  const kind = signals.some((signal) => signal === 'ABORTERROR' || signal === 'TIMEOUTERROR' ||
-    signal === 'ETIMEDOUT' || signal === 'ESOCKETTIMEDOUT' || signal.startsWith('UND_ERR_') && signal.includes('TIMEOUT'))
+  const atlasCategory = details.errorName === 'MongoServerError' && details.codeName === 'AtlasError' && details.errorCode === '8000'
+    ? classifyAtlasErrorMessage(error)
+    : undefined;
+  const kind = details.errorName === 'MongoServerError' || details.codeName
+    ? 'mongodb_server_error'
+    : signals.some((signal) => signal === 'ABORTERROR' || signal === 'TIMEOUTERROR' ||
+    signal === 'ETIMEOUT' || signal === 'ETIMEDOUT' || signal === 'ESOCKETTIMEDOUT' ||
+    signal.startsWith('UND_ERR_') && signal.includes('TIMEOUT'))
     ? 'timeout'
     : signals.some((signal) => signal === 'ENOTFOUND' || signal === 'EAI_AGAIN' || signal === 'EAI_FAIL' || signal === 'ENODATA' ||
       signal.startsWith('ERR_TLS_') || signal.startsWith('ERR_SSL_') || signal.startsWith('CERT_') ||
@@ -122,7 +160,13 @@ export function safeFailureRecord(error: unknown, resourceUrl?: string): SafeFai
   const safeError = new SanitizedIntegrationError(kind, {
     ...(resourceUrl ? { resourceUrl } : {}),
     ...(details.errorName ? { errorName: details.errorName } : {}),
+    ...(details.codeName ? { codeName: details.codeName } : {}),
+    ...(details.errorCode ? { errorCode: details.errorCode } : {}),
+    ...(atlasCategory ? { atlasCategory } : {}),
+    ...(details.causeName ? { causeName: details.causeName } : {}),
     ...(details.causeCode ? { causeCode: details.causeCode } : {}),
+    ...(details.syscall ? { syscall: details.syscall } : {}),
+    ...(details.serverStates ? { serverStates: details.serverStates } : {}),
   });
   return safeError.failure;
 }
@@ -152,33 +196,164 @@ export function failureForHttpStatus(
 
 function collectErrorDetails(value: unknown, seen = new Set<object>(), depth = 0): {
   errorName?: string;
+  codeName?: string;
+  errorCode?: string;
+  causeName?: string;
   causeCode?: string;
+  syscall?: string;
+  serverStates?: string[];
   codes: string[];
 } {
   if (depth > 5 || typeof value !== 'object' || value === null || seen.has(value)) return { codes: [] };
   seen.add(value);
   const record = value as Record<string, unknown>;
   const name = typeof record.name === 'string' ? sanitizeErrorName(record.name) : undefined;
-  const code = typeof record.code === 'string' ? record.code.toUpperCase() : undefined;
-  const safeCode = code ? sanitizeTransportCode(code) : undefined;
-  const details = record.cause ? collectErrorDetails(record.cause, seen, depth + 1) : { codes: [] as string[] };
-  const codes = [...(name ? [name.toUpperCase()] : []), ...(code ? [code] : []), ...details.codes];
+  const code = typeof record.code === 'string'
+    ? record.code.toUpperCase()
+    : typeof record.code === 'number' && Number.isInteger(record.code) && record.code >= 0 && record.code <= 999999
+      ? String(record.code)
+      : undefined;
+  const errorCode = code ? sanitizeDiagnosticCode(code) : undefined;
+  const codeName = typeof record.codeName === 'string' ? sanitizeMongoCodeName(record.codeName) : undefined;
+  const cause = typeof record.cause === 'object' && record.cause !== null
+    ? collectErrorDetails(record.cause, seen, depth + 1)
+    : { codes: [] as string[] };
+  const serverFailure = collectServerFailureDetails(record.reason, seen, depth + 1);
+  const syscall = typeof record.syscall === 'string' ? sanitizeSyscall(record.syscall) : undefined;
+  const serverStates = collectServerStates(record.reason);
+  const codes = [...(name ? [name.toUpperCase()] : []), ...(code ? [code] : []), ...cause.codes, ...serverFailure.codes];
   if (Array.isArray(record.errors)) {
     for (const nested of record.errors) codes.push(...collectErrorDetails(nested, seen, depth + 1).codes);
   }
   return {
-    ...(name ? { errorName: name } : details.errorName ? { errorName: details.errorName } : {}),
-    ...(safeCode ? { causeCode: safeCode } : details.causeCode ? { causeCode: details.causeCode } : {}),
+    ...(name ? { errorName: name } : {}),
+    ...(codeName ? { codeName } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...((cause.errorName ?? cause.causeName ?? serverFailure.errorName ?? serverFailure.causeName)
+      ? { causeName: cause.errorName ?? cause.causeName ?? serverFailure.errorName ?? serverFailure.causeName }
+      : {}),
+    ...((cause.errorCode ?? cause.causeCode ?? serverFailure.errorCode ?? serverFailure.causeCode)
+      ? { causeCode: cause.errorCode ?? cause.causeCode ?? serverFailure.errorCode ?? serverFailure.causeCode }
+      : {}),
+    ...((syscall ?? cause.syscall ?? serverFailure.syscall)
+      ? { syscall: syscall ?? cause.syscall ?? serverFailure.syscall }
+      : {}),
+    ...(serverStates ? { serverStates } : {}),
     codes,
   };
 }
 
 function sanitizeErrorName(value: string | undefined): string | undefined {
   const allowed = new Set([
-    'AbortError', 'ConnectTimeoutError', 'Error', 'FetchError', 'HeadersTimeoutError',
+    'AbortError', 'ConnectTimeoutError', 'Error', 'FetchError', 'HeadersTimeoutError', 'MongoServerError',
+    'MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoServerSelectionError', 'MongoTimeoutError',
     'RequestAbortedError', 'SocketError', 'TimeoutError', 'TypeError',
   ]);
   return value && allowed.has(value) ? value : undefined;
+}
+
+function sanitizeMongoCodeName(value: string | undefined): string | undefined {
+  const allowed = new Set([
+    'AtlasError', 'AuthenticationFailed', 'BadValue', 'CommandNotFound', 'DuplicateKey',
+    'ExceededTimeLimit', 'HostUnreachable', 'IllegalOperation', 'IndexNotFound', 'InvalidOptions',
+    'NetworkTimeout', 'NamespaceNotFound', 'NotPrimary', 'OperationFailed', 'PrimarySteppedDown',
+    'ShutdownInProgress', 'Unauthorized',
+  ]);
+  return value && allowed.has(value) ? value : undefined;
+}
+
+function sanitizeAtlasErrorCategory(value: AtlasErrorCategory | undefined): AtlasErrorCategory | undefined {
+  return value && ['authentication_failed', 'authorization_denied', 'network_access_denied', 'other_atlas_error'].includes(value)
+    ? value
+    : undefined;
+}
+
+function classifyAtlasErrorMessage(error: unknown): AtlasErrorCategory {
+  if (typeof error !== 'object' || error === null) return 'other_atlas_error';
+  const message = (error as Record<string, unknown>).message;
+  if (typeof message !== 'string') return 'other_atlas_error';
+  const normalized = message.toLowerCase();
+  if (/authentication failed|authenticationfailure|bad auth|sasl authentication/.test(normalized)) {
+    return 'authentication_failed';
+  }
+  if (/ip(?:v4|v6)? address.{0,120}(?:not allowed|not in|not on|missing from|has not been added)/.test(normalized) ||
+      /ip access list|network access denied/.test(normalized)) {
+    return 'network_access_denied';
+  }
+  if (/not authorized|unauthorized|authorization denied|not permitted|insufficient privilege/.test(normalized)) {
+    return 'authorization_denied';
+  }
+  return 'other_atlas_error';
+}
+
+function sanitizeDiagnosticCode(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const code = value.toUpperCase();
+  const mongoCodes = new Set([
+    'MONGOSERVERSELECTIONERROR', 'MONGONETWORKERROR', 'MONGONETWORKTIMEOUTERROR', 'MONGOTIMEOUTERROR',
+  ]);
+  return mongoCodes.has(code) || /^\d{1,6}$/.test(code) ? code : sanitizeTransportCode(code);
+}
+
+function sanitizeSyscall(value: string | undefined): string | undefined {
+  const allowed = new Set(['connect', 'getaddrinfo', 'querySrv', 'queryTxt', 'read', 'write']);
+  return value && allowed.has(value) ? value : undefined;
+}
+
+function sanitizeServerStates(value: unknown): string[] | undefined {
+  const allowed = new Set([
+    'Unknown', 'Standalone', 'Mongos', 'RSPrimary', 'RSSecondary', 'RSArbiter', 'RSOther', 'RSGhost', 'LoadBalancer',
+  ]);
+  if (!Array.isArray(value)) return undefined;
+  const states = [...new Set(value.filter((state): state is string => typeof state === 'string' && allowed.has(state)))].sort();
+  return states.length ? states : undefined;
+}
+
+function collectServerStates(reason: unknown): string[] | undefined {
+  if (typeof reason !== 'object' || reason === null) return undefined;
+  const servers = (reason as Record<string, unknown>).servers;
+  const descriptions = servers instanceof Map ? [...servers.values()] : [];
+  const states = descriptions.flatMap((description) => {
+    if (typeof description !== 'object' || description === null) return [];
+    const type = (description as Record<string, unknown>).type;
+    return typeof type === 'string' ? [type] : [];
+  });
+  return sanitizeServerStates(states);
+}
+
+function collectServerFailureDetails(reason: unknown, seen: Set<object>, depth: number): {
+  errorName?: string;
+  errorCode?: string;
+  causeName?: string;
+  causeCode?: string;
+  syscall?: string;
+  codes: string[];
+} {
+  if (typeof reason !== 'object' || reason === null) return { codes: [] };
+  const servers = (reason as Record<string, unknown>).servers;
+  const descriptions = servers instanceof Map ? [...servers.values()] : [];
+  const failures = descriptions.flatMap((description) => {
+    if (typeof description !== 'object' || description === null) return [];
+    const error = (description as Record<string, unknown>).error;
+    return typeof error === 'object' && error !== null
+      ? [collectErrorDetails(error, seen, depth)]
+      : [];
+  });
+  const first = <T extends keyof Omit<ReturnType<typeof collectErrorDetails>, 'codes'>>(key: T) =>
+    failures.find((failure) => failure[key] !== undefined)?.[key];
+  const errorName = first('errorName');
+  const errorCode = first('errorCode');
+  const causeName = first('causeName');
+  const causeCode = first('causeCode');
+  const syscall = first('syscall');
+  return {
+    ...(errorName ? { errorName } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(causeName ? { causeName } : {}),
+    ...(causeCode ? { causeCode } : {}),
+    ...(syscall ? { syscall } : {}),
+    codes: failures.flatMap((failure) => failure.codes),
+  };
 }
 
 function sanitizeTransportCode(value: string | undefined): string | undefined {

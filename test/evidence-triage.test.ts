@@ -10,7 +10,7 @@ const relevantInterests = ['network security', 'machine learning'];
 
 function makeCandidate(overrides: Partial<ProfessorCandidate> = {}, evidence?: DiscoveryEvidence[]): ProfessorCandidate {
   return {
-    id: 'candidate-hash-1', name: 'Private Name | Secure Systems Lab', institution: 'KAIST', country: 'South Korea',
+    id: 'candidate-hash-1', name: 'Private Name | Secure Systems Lab', professorName: 'Private Name', leadType: 'professor_profile', institution: 'KAIST', country: 'South Korea',
     officialProfileUrl: sourceUrl,
     officialEmail: 'private@example.edu', officialContactUrl: 'https://cs.kaist.ac.kr/contact',
     discoveryEvidence: evidence ?? [
@@ -74,6 +74,7 @@ test('a named professor page title without substantive research text stays uncer
     officialProfileUrl: 'https://www.auckland.ac.nz/research',
     discoveryEvidence: [{ kind: 'professor-profile', sourceUrl: 'https://www.auckland.ac.nz/research', excerpt: title, retrievedAt: '2026-10-30T00:00:00.000Z', verification: 'unverified', region: 'New Zealand', query: 'not sent' }],
   });
+  delete candidate.professorName;
   const saved: CandidateEvidenceTriage[] = [];
   let providerCalls = 0;
   const results = await triageCandidateEvidence({
@@ -82,7 +83,7 @@ test('a named professor page title without substantive research text stays uncer
   });
   assert.equal(providerCalls, 0);
   assert.equal(results[0]?.recommendation, 'uncertain');
-  assert.match(results[0]?.rationale ?? '', /does not establish the professor identity and research details together/);
+  assert.match(results[0]?.rationale ?? '', /general school or program source/);
   assert.deepEqual(results[0]?.facts, [{ kind: 'context', sourceUrl: 'https://www.auckland.ac.nz/research', quote: title }]);
 });
 
@@ -90,8 +91,10 @@ test('generic school descriptions do not become professor leads', async () => {
   const excerpt = 'The School of Computing supports a broad range of academic research activities.';
   const candidate = makeCandidate({
     name: 'School of Computing – Example University',
+    leadType: 'school',
     discoveryEvidence: [{ kind: 'official-page', sourceUrl: 'https://cs.kaist.ac.kr/school', excerpt, retrievedAt: '2026-10-30T00:00:00.000Z', verification: 'unverified', region: 'South Korea', query: 'not sent' }],
   });
+  delete candidate.professorName;
   delete candidate.officialProfileUrl;
   const saved: CandidateEvidenceTriage[] = [];
   let providerCalls = 0;

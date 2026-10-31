@@ -4,7 +4,7 @@ import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import { acceptDiscoveredProfessorLead, rejectDiscoveredProfessorLead } from '../src/application/discovery-lead-review.ts';
 
 const candidate: ProfessorCandidate = {
-  id: 'professor-lead-1', name: 'Dr Example', institution: 'Example University', country: 'Exampleland',
+  id: 'professor-lead-1', name: 'Dr Example | Example University profile', professorName: 'Dr Example', institution: 'Example University', country: 'Exampleland',
   leadType: 'professor_profile', officialProfileUrl: 'https://university.example.edu/people/example',
   officialEmail: 'example@university.example.edu', emailSourceUrl: 'https://university.example.edu/people/example',
   discoveryEvidence: [

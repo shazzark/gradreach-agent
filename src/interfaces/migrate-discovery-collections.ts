@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import './local-env.ts';
+import '../infrastructure/local-env.ts';
 import { MongoClient } from 'mongodb';
 import { migrateDiscoveryCollections, DiscoveryCollectionMigrationError } from '../infrastructure/discovery-collection-migration.ts';
 import { safeFailureRecord } from '../infrastructure/sanitized-failure.ts';

@@ -28,7 +28,7 @@ export function formatReviewQueue(candidates: ProfessorCandidate[]): string {
   const queue = candidates.filter((candidate) => candidate.status === 'needs-evidence' || candidate.status === 'ready-for-review' || Boolean(candidate.personalizedDraft));
   if (queue.length === 0) return 'No candidates need evidence review.';
   return queue.map((candidate) => [
-    `${terminalText(candidate.id)} | ${terminalText(candidate.name)} | ${terminalText(candidate.institution)} | ${candidate.status}`,
+    `${terminalText(candidate.id)} | Lead/page title: ${terminalText(candidate.name)} | Professor: ${terminalText(candidate.professorName || 'Not established')} | Institution: ${terminalText(candidate.institution || 'Unknown')} | ${candidate.status} | Type: ${candidate.leadType ?? 'unclassified'}`,
     ...(candidate.discoveryEvidence ?? []).map((evidence) => `  [${evidence.verification}] ${evidence.kind}: ${terminalText(evidence.sourceUrl)}\n    ${terminalText(evidence.excerpt).slice(0, 240)}`),
     candidate.personalizedDraft ? `  Draft: ${terminalText(candidate.personalizedDraft).slice(0, 500)}` : '',
   ].filter(Boolean).join('\n')).join('\n\n');
@@ -244,7 +244,7 @@ async function run(): Promise<void> {
           const profileEvidence = candidate.discoveryEvidence?.find((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl);
           const contactEvidence = candidate.discoveryEvidence?.find((item) => item.kind === 'contact' && item.sourceUrl === candidate.emailSourceUrl);
           const triage = await repositories.evidenceTriage.get(candidate.id);
-          stdout.write(`\n${terminalText(candidate.name)} | ${terminalText(candidate.id)}\n`);
+          stdout.write(`\nLead/page title: ${terminalText(candidate.name)} | Professor: ${terminalText(candidate.professorName || 'Not established')} | ${terminalText(candidate.id)}\n`);
           stdout.write(`Institution: ${terminalText(candidate.institution || 'Unknown')} | Country: ${terminalText(candidate.country || 'Unknown')}\n`);
           stdout.write(`Official professor source [${profileEvidence?.verification ?? 'unavailable'}]: ${terminalText(profileEvidence?.sourceUrl ?? candidate.officialProfileUrl ?? 'Unavailable')}\n`);
           if (profileEvidence?.quote) stdout.write(`Supporting quote: "${terminalText(profileEvidence.quote)}"\n`);

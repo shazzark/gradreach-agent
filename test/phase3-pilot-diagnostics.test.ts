@@ -12,6 +12,9 @@ test('pilot result diagnostics append independently and omit result content', as
     await appendPhase3ResultDiagnostic({
       country: 'Japan', hostname: 'outside.example.edu', outcome: 'rejected', rejectionReasons: ['exact_host'],
     }, path);
+    await appendPhase3ResultDiagnostic({
+      country: 'South Korea', hostname: 'cs.kaist.ac.kr', outcome: 'rejected', rejectionReasons: ['not_professor_profile'],
+    }, path);
 
     await assert.rejects((async () => {
       await appendPhase3ResultDiagnostic({
@@ -21,9 +24,10 @@ test('pilot result diagnostics append independently and omit result content', as
     })(), /later result processing failed/);
 
     const records = (await readFile(path, 'utf8')).trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.equal(records.length, 2);
+    assert.equal(records.length, 3);
     assert.deepEqual(records.map(({ country, hostname, outcome, rejectionReasons }) => ({ country, hostname, outcome, rejectionReasons })), [
       { country: 'Japan', hostname: 'outside.example.edu', outcome: 'rejected', rejectionReasons: ['exact_host'] },
+      { country: 'South Korea', hostname: 'cs.kaist.ac.kr', outcome: 'rejected', rejectionReasons: ['not_professor_profile'] },
       { country: 'New Zealand', hostname: 'www.cs.auckland.ac.nz', outcome: 'rejected', rejectionReasons: ['invalid_content'] },
     ]);
     const serialized = JSON.stringify(records);

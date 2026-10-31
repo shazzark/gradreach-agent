@@ -25,6 +25,8 @@ export interface DiscoveryOptions {
   resultsPerQuery?: number;
   /** Combines a region's reviewed exact hosts into one bounded Brave request. */
   oneSearchPerRegion?: boolean;
+  /** Persist only candidates with a named professor and substantive same-page profile evidence. */
+  saveOnlyProfessorProfiles?: boolean;
   /** Stops after this many Brave requests; useful for a single bounded pilot. */
   maxSearches?: number;
   targetPoolSize?: number;
@@ -268,7 +270,8 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
   const excerpt = extractOfficialPageExcerpt(page.html);
   const profile = professorProfileEvidence(page.html);
   if (profile) {
-    candidate.name = profile.name;
+    candidate.name = pageHeading(page.html) || candidate.name;
+    candidate.professorName = profile.name;
     candidate.leadType = 'professor_profile';
     candidate.officialProfileUrl = page.url;
     const email = explicitlyAssociatedEmail(page.html, profile.name);
@@ -300,7 +303,7 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
     else {
       candidate.officialContactUrl = sourceUrl;
       if (candidate.leadType === 'professor_profile') {
-        const email = explicitlyAssociatedEmail(linkedPage.html, candidate.name);
+        const email = explicitlyAssociatedEmail(linkedPage.html, candidate.professorName ?? '');
         if (email) {
           candidate.officialEmail = email;
           candidate.emailSourceUrl = sourceUrl;
@@ -331,7 +334,19 @@ export function markCandidateEvidenceReviewed(candidate: ProfessorCandidate, rev
     ...(item.kind === 'official-page' && canonicalizeSourceUrl(item.sourceUrl) === profileUrl ? { kind: 'professor-profile' as const } : {}),
   }));
   candidate.officialProfileUrl = profileUrl;
-  candidate.name = reviewedProfessorName.trim();
+  const confirmedName = reviewedProfessorName.trim();
+  const profileEvidence = evidence.find((item) =>
+    ['official-page', 'professor-profile'].includes(item.kind) && canonicalizeSourceUrl(item.sourceUrl) === profileUrl,
+  );
+  const confirmedNamePattern = new RegExp(confirmedName.split(/\s+/).map(escapeRegex).join('\\s+'), 'i');
+  const hasSubstantiveResearch = profileEvidence?.excerpt.split(/(?<=[.!?])\s+/).some((sentence) =>
+    sentence.length >= 50 && RESEARCH_SENTENCE.test(sentence),
+  );
+  if (!profileEvidence || !confirmedNamePattern.test(profileEvidence.excerpt) ||
+      !confirmedNamePattern.test(candidate.name) || !hasSubstantiveResearch) {
+    throw new Error('The selected official profile must identify the confirmed professor and support substantive research');
+  }
+  candidate.professorName = confirmedName;
   candidate.leadType = 'professor_profile';
   if (candidate.status === 'needs-evidence') candidate.status = 'ready-for-review';
   return candidate;
@@ -439,6 +454,21 @@ export async function discoverProfessorCandidates(input: {
               continue;
             }
             throw error;
+          }
+          const professorEvidence = candidate.discoveryEvidence?.find((item) =>
+            item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl &&
+            item.verification === 'unverified' && Boolean(item.quote?.trim()),
+          );
+          if (input.options.saveOnlyProfessorProfiles &&
+              (candidate.leadType !== 'professor_profile' || !candidate.officialProfileUrl || !professorEvidence)) {
+            rejected += 1;
+            await input.options.onResultDiagnostic?.({
+              country: region,
+              hostname: failedChecks.hostname,
+              outcome: 'rejected',
+              rejectionReasons: ['not_professor_profile'],
+            });
+            continue;
           }
           await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'page_validated', rejectionReasons: [] });
           await input.repository.save(candidate);

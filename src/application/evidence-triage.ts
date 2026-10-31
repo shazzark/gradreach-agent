@@ -116,9 +116,9 @@ function prepareLead(candidate: ProfessorCandidate, leadNumber: number, allowedH
     evidenceBySource.set(item.sourceUrl, sources);
   }
 
-  const personName = personNameFromLeadTitle(candidate.name);
+  const personName = candidate.professorName?.trim() || undefined;
   const profileUrl = candidate.officialProfileUrl ? safeSourceUrl(candidate.officialProfileUrl, allowedHosts) : undefined;
-  const professorEvidence = safeEvidence.filter((item) => PROFESSOR_EVIDENCE_KINDS.has(item.kind) || (profileUrl && profileUrl === item.sourceUrl));
+  const professorEvidence = safeEvidence.filter((item) => PROFESSOR_EVIDENCE_KINDS.has(item.kind) && (!profileUrl || profileUrl === item.sourceUrl));
   const identityPredicate = (quote: string) => Boolean(personName && containsPersonName(quote, personName));
   const profilePair = professorEvidence.map((item) => ({
     identity: personName ? findExactFact([item], 'identity', identityPredicate) : undefined,
@@ -131,7 +131,7 @@ function prepareLead(candidate: ProfessorCandidate, leadNumber: number, allowedH
     leadNumber,
     candidate,
     ...(personName ? { personName } : {}),
-    isProfessorProfile: professorEvidence.length > 0,
+    isProfessorProfile: candidate.leadType === 'professor_profile' && Boolean(personName) && professorEvidence.length > 0,
     hasIdentityAndResearchOnSamePage: Boolean(profilePair),
     evidenceBySource,
     safeEvidence,

@@ -20,14 +20,33 @@ function terminalText(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function displaySourceUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password) return 'Unavailable';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch { return 'Unavailable'; }
+}
+
+function isIndividualProfessorProfile(candidate: ProfessorCandidate): boolean {
+  if (candidate.leadType !== 'professor_profile' || !candidate.professorName?.trim() || !candidate.officialProfileUrl) return false;
+  const evidence = (candidate.discoveryEvidence ?? []).find((item) =>
+    item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl && Boolean(item.quote?.trim()),
+  );
+  const namePattern = new RegExp(candidate.professorName.trim().split(/\s+/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'i');
+  return Boolean(evidence && namePattern.test(evidence.excerpt) && Boolean(evidence.quote?.trim()));
+}
+
 function renderLead(candidate: ProfessorCandidate, triage?: CandidateEvidenceTriage): string {
   const evidence = candidate.discoveryEvidence ?? [];
   const profile = evidence.find((item) => item.kind === 'professor-profile' && item.sourceUrl === candidate.officialProfileUrl);
   const contact = evidence.find((item) => item.kind === 'contact' && item.sourceUrl === candidate.emailSourceUrl);
   const lines = [
-    `${terminalText(candidate.name)} | ${terminalText(candidate.id)}`,
+    `Lead/page title: ${terminalText(candidate.name)} | Professor: ${terminalText(candidate.professorName ?? 'Not established')} | ${terminalText(candidate.id)}`,
     `Institution: ${terminalText(candidate.institution || 'Unknown')} | Country: ${terminalText(candidate.country || 'Unknown')}`,
-    `Official profile [${profile?.verification ?? 'unavailable'}]: ${terminalText(profile?.sourceUrl ?? candidate.officialProfileUrl ?? 'Unavailable')}`,
+    `Official profile [${profile?.verification ?? 'unavailable'}]: ${terminalText(displaySourceUrl(profile?.sourceUrl ?? candidate.officialProfileUrl ?? ''))}`,
     `Supporting quote: "${terminalText(profile?.quote ?? profile?.excerpt ?? 'Unavailable')}"`,
   ];
 
@@ -41,6 +60,18 @@ function renderLead(candidate: ProfessorCandidate, triage?: CandidateEvidenceTri
   return lines.join('\n');
 }
 
+function renderGeneralLead(candidate: ProfessorCandidate): string {
+  const sources = [...new Map((candidate.discoveryEvidence ?? []).map((item) => [
+    `${item.kind}:${displaySourceUrl(item.sourceUrl)}`,
+    `  ${item.kind}: ${displaySourceUrl(item.sourceUrl)}`,
+  ])).values()];
+  return [
+    `Lead/page title: ${terminalText(candidate.name)} | ${terminalText(candidate.id)}`,
+    `Lead type: ${candidate.leadType ?? 'unclassified'} | Professor: Not established from saved profile evidence.`,
+    ...(sources.length ? ['Sources:', ...sources] : ['Sources: Unavailable']),
+  ].join('\n');
+}
+
 /** Reads only candidates and their saved triage; it has no startup-write or provider dependencies. */
 export async function runReadOnlyLeadViewer(input: {
   connect: () => Promise<ReadOnlyStorage>;
@@ -52,24 +83,38 @@ export async function runReadOnlyLeadViewer(input: {
   try {
     storage = await input.connect();
     stage = 'candidate_read';
-    const candidates = (await storage.repositories.candidates.list()).filter((candidate) =>
-      candidate.leadType === 'professor_profile' && candidate.status === 'needs-evidence' &&
-      !candidate.discoveryReview && !candidate.approvedForSending,
+    const pending = (await storage.repositories.candidates.list()).filter((candidate) =>
+      candidate.status === 'needs-evidence' && !candidate.discoveryReview && !candidate.approvedForSending,
     );
-    if (candidates.length === 0) {
-      write('No undecided professor leads need review.');
+    const professors = pending.filter(isIndividualProfessorProfile);
+    const general = pending.filter((candidate) => !isIndividualProfessorProfile(candidate));
+    if (pending.length === 0) {
+      write('No undecided leads need review.');
       return true;
     }
 
-    for (const candidate of candidates) {
+    write(`Individual professor profiles needing review: ${professors.length}`);
+    for (const candidate of professors) {
       stage = 'recommendation_read';
       const triage = await storage.repositories.evidenceTriage.get(candidate.id);
       write(renderLead(candidate, triage));
     }
+    write(`General or unclassified leads needing review: ${general.length}`);
+    for (const candidate of general) write(renderGeneralLead(candidate));
     return true;
   } catch (error) {
     const failure = safeFailureRecord(error);
-    write(`Read failed at ${stage}: ${failure.kind}: ${failure.message}${failure.causeCode ? ` (${failure.causeCode})` : ''}`);
+    const diagnostics = [
+      failure.errorName ? `error=${failure.errorName}` : undefined,
+      failure.codeName ? `codeName=${failure.codeName}` : undefined,
+      failure.errorCode ? `code=${failure.errorCode}` : undefined,
+      failure.atlasCategory ? `category=${failure.atlasCategory}` : undefined,
+      failure.causeName ? `cause=${failure.causeName}` : undefined,
+      failure.causeCode ? `causeCode=${failure.causeCode}` : undefined,
+      failure.syscall ? `syscall=${failure.syscall}` : undefined,
+      failure.serverStates ? `servers=${failure.serverStates.join(',')}` : undefined,
+    ].filter((detail): detail is string => detail !== undefined);
+    write(`Read failed at ${stage}: ${failure.kind}: ${failure.message}${diagnostics.length ? ` [${diagnostics.join(' ')}]` : ''}`);
     return false;
   } finally {
     try { await storage?.close(); } catch { /* Closing the read-only client must not expose raw driver errors. */ }

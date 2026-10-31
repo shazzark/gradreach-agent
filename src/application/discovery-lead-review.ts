@@ -17,7 +17,12 @@ export function acceptDiscoveredProfessorLead(candidate: ProfessorCandidate, rev
   validatePendingProfessorLead(candidate);
   const sourceUrl = candidate.officialProfileUrl;
   const evidence = candidate.discoveryEvidence ?? [];
-  if (!sourceUrl || !evidence.some((item) => item.kind === 'professor-profile' && item.sourceUrl === sourceUrl)) {
+  const profile = evidence.find((item) => item.kind === 'professor-profile' && item.sourceUrl === sourceUrl);
+  const professorName = candidate.professorName?.trim();
+  const nameSupported = professorName && profile && new RegExp(
+    professorName.split(/\s+/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'i',
+  ).test(profile.excerpt);
+  if (!professorName || !sourceUrl || !profile || !nameSupported) {
     throw new Error('A fetched official professor profile is required to accept this lead');
   }
   const emailSource = candidate.emailSourceUrl;

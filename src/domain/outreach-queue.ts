@@ -9,7 +9,10 @@ export type CandidateStatus =
 
 export interface ProfessorCandidate {
   id: string;
+  /** Saved page or lead title; it is not a professor identity. */
   name: string;
+  /** Set only when an official individual profile identifies this person. */
+  professorName?: string;
   institution: string;
   country: string;
   /** Discovery classification is optional so older saved leads remain readable. */

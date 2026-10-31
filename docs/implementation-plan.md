@@ -29,6 +29,8 @@ New result processing keeps the search region separate from a person's country a
 
 The first live professor-profile pilot was capped at one Brave request and three results. Its single request failed with sanitized `network_error` before any result diagnostics or leads were saved. The local MongoDB SRV lookup also timed out, so no canonical candidate records were changed; no request was retried. No real professor profiles were found in this pilot.
 
+On 2026-10-31, the two legacy discovery collections were renamed in place to `discovery_leads` and `lead_triage_recommendations`. Read-only verification found 11 lead documents and 11 triage documents after the rename, with the `_id_` index retained on each collection. The legacy leads have no saved lead type or separate professor name, so the review viewer lists them under general or unclassified leads; page titles are not treated as professor identities. The candidate model now stores page/lead title separately from `professorName`, which is set only from supported official profile evidence or explicit evidence review. No Brave or Gemini request was made during this update.
+
 Phase 4 validates reviewed program JSON and keeps unsupported facts unclear. GPA and currency scales are never converted. Affordability is only compared when annual budget and currency are configured. Transcript references can remain in the private profile; transcript parsing is not implemented. Program, assessment, and scheduler repositories/indexes exist. Their MongoDB integration test is skipped without `MONGODB_TEST_URI`. Do not substitute `MONGODB_URI` unless it is deliberately configured as a disposable test deployment.
 
 ### Draft generation

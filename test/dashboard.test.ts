@@ -5,7 +5,7 @@ import { buildDashboardSnapshot, candidatesToCsv } from '../src/application/dash
 import { formatReviewQueue } from '../src/interfaces/terminal-app.ts';
 
 const reviewedCandidate: ProfessorCandidate = {
-  id: 'p1', name: 'Professor One', institution: 'Example University', country: 'Exampleland',
+  id: 'p1', name: 'Professor One profile | Example University', professorName: 'Professor One', institution: 'Example University', country: 'Exampleland',
   officialProfileUrl: 'https://university.example.edu/profile', officialEmail: 'p1@example.edu',
   emailSourceUrl: 'https://university.example.edu/contact', programUrl: 'https://university.example.edu/msc',
   sourceCheckedAt: '2026-10-19T10:00:00Z', fitSummary: 'Verified fit.', personalizedDraft: 'Source-cited draft.',
@@ -47,5 +47,7 @@ test('review display includes source links and draft text for human inspection',
   const candidate = { ...reviewedCandidate, personalizedDraft: 'Dear Professor, this draft cites reviewed evidence.' };
   const output = formatReviewQueue([candidate]);
   assert.match(output, /https:\/\/university\.example\.edu\/profile/);
+  assert.match(output, /Lead\/page title: Professor One profile \| Example University/);
+  assert.match(output, /Professor: Professor One/);
   assert.match(output, /Dear Professor, this draft cites reviewed evidence/);
 });

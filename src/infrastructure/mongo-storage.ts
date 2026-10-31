@@ -436,7 +436,11 @@ export async function connectMongoStorage(
       close: () => client.close(),
     };
   } catch (error) {
-    await client.close();
+    try {
+      await client.close();
+    } catch {
+      // Cleanup failures must not replace the connection error and its safe diagnostics.
+    }
     throw error;
   }
 }

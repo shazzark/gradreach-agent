@@ -17,7 +17,7 @@ const profileUrl = 'https://university.example.edu/people/professor';
 const contactUrl = 'https://university.example.edu/people/contact';
 const observation = 'Our group studies resilient distributed systems for public infrastructure.';
 const candidate: ProfessorCandidate = {
-  id: 'candidate-1', name: 'Synthetic Professor', institution: 'Example University', country: 'Exampleland',
+  id: 'candidate-1', name: 'Professor profile | Example University', professorName: 'Synthetic Professor', institution: 'Example University', country: 'Exampleland',
   officialProfileUrl: profileUrl, officialContactUrl: contactUrl, officialEmail: 'professor@example.edu', emailSourceUrl: contactUrl,
   sourceCheckedAt: '2026-10-19T12:00:00.000Z', status: 'ready-for-review', approvedForSending: false, priority: 1,
   discoveryEvidence: [
