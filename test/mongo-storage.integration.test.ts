@@ -8,6 +8,7 @@ import { createPhase2Indexes, createPhase4Indexes, createRepositories } from '..
 import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-collection-migration.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
+import { assertMongoTestUri } from './mongo-test-uri.ts';
 
 const mongoUri = process.env.MONGODB_TEST_URI;
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
@@ -40,8 +41,7 @@ function sampleAssessment(assessedAt: string): ProgramAssessment {
 test('Mongo profile, candidate, program, assessment and scheduler repositories preserve storage boundaries', {
   skip: !mongoUri ? 'Set MONGODB_TEST_URI to an isolated test deployment to run MongoDB integration checks' : false,
 }, async () => {
-  const uriDatabaseName = decodeURIComponent(new URL(mongoUri!).pathname.slice(1));
-  assert.equal(uriDatabaseName, 'gradreach_test', 'MONGODB_TEST_URI must target the gradreach_test database');
+  assertMongoTestUri(mongoUri!);
 
   const client = new MongoClient(mongoUri!);
   let db;
