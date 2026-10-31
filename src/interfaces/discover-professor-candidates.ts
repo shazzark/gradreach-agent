@@ -103,7 +103,15 @@ async function run(): Promise<void> {
   let stage: DiscoveryRunnerStage = 'mongodb_connect';
   try {
     const result = await runSouthKoreaProfessorPilot({ onStage: (current) => { stage = current; } });
-    process.stdout.write(`${JSON.stringify({ ok: true, searches: result.searches, saved: result.saved, rejected: result.rejected, poolSize: result.poolSize })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      searches: result.searches,
+      saved: result.saved,
+      duplicates: result.duplicates,
+      validationRejections: result.validationRejections,
+      officialPageFetchFailures: result.officialPageFetchFailures,
+      poolSize: result.poolSize,
+    })}\n`);
   } catch (error) {
     const failure = safeFailureRecord(error);
     process.stderr.write(`${JSON.stringify({

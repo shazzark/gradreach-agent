@@ -44,3 +44,39 @@ test('pilot result diagnostics reject host fields that could contain URLs', asyn
     country: 'Japan', hostname: 'university.example.edu/path?query=private', outcome: 'rejected', rejectionReasons: ['exact_host'],
   }, join(tmpdir(), 'unused-result-diagnostics.jsonl')), /Invalid diagnostic hostname/);
 });
+
+test('page failure diagnostics retain safe path and error fields while dropping query secrets and unknown codes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gradreach-phase3-safe-failure-'));
+  const path = join(directory, 'result-diagnostics.jsonl');
+  try {
+    await appendPhase3ResultDiagnostic({
+      country: 'South Korea', hostname: 'cs.kaist.ac.kr', outcome: 'fetch_failed',
+      rejectionReasons: ['network_error'], resourcePath: '/people/professor?token=private-value',
+      errorName: 'FetchError', errorCode: 'ECONNRESET', causeName: 'TypeError', causeCode: 'ECONNRESET',
+    }, path);
+    await appendPhase3ResultDiagnostic({
+      country: 'South Korea', hostname: 'cs.kaist.ac.kr', outcome: 'fetch_failed',
+      rejectionReasons: ['http_status'], resourcePath: '/people/missing#private-fragment', statusCode: 503,
+      errorName: 'NotAllowedError', errorCode: 'private-credential', causeName: 'UnknownError', causeCode: 'private-credential',
+    }, path);
+
+    const output = await readFile(path, 'utf8');
+    const records = output.trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(records.map((record) => Object.fromEntries(Object.entries({
+      resourcePath: record.resourcePath,
+      statusCode: record.statusCode,
+      errorName: record.errorName,
+      errorCode: record.errorCode,
+      causeName: record.causeName,
+      causeCode: record.causeCode,
+    }).filter(([, value]) => value !== undefined))), [
+      { resourcePath: '/people/professor', errorName: 'FetchError', errorCode: 'ECONNRESET', causeName: 'TypeError', causeCode: 'ECONNRESET' },
+      { resourcePath: '/people/missing', statusCode: 503 },
+    ]);
+    for (const secret of ['private-value', 'private-fragment', 'private-credential', '?token', '#private']) {
+      assert.equal(output.includes(secret), false);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

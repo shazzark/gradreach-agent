@@ -550,9 +550,59 @@ test('discovery skips a result whose official page is invalid and continues to l
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
   assert.deepEqual(pageFailures, [{ kind: 'invalid_content', resourceHost: 'university.example.edu', resourcePath: '/paper.pdf' }]);
   assert.deepEqual(resultDiagnostics, [
-    { country: 'Country A', hostname: 'university.example.edu', outcome: 'rejected', rejectionReasons: ['invalid_content'] },
+    { country: 'Country A', hostname: 'university.example.edu', outcome: 'fetch_failed', rejectionReasons: ['invalid_content'], resourcePath: '/paper.pdf', statusCode: 200 },
     { country: 'Country A', hostname: 'university.example.edu', outcome: 'page_validated', rejectionReasons: [] },
   ]);
+});
+
+test('discovery summary separates duplicates, validation rejections, and official-page failures', async () => {
+  const singleCountryProfile = parseApplicantProfile({
+    ...profile,
+    applicant: { ...profile.applicant, target: {
+      ...profile.applicant.target, countries: ['Country A'], fields: [], researchInterests: ['Computer Science'],
+    } },
+  });
+  const diagnostics: Array<Record<string, unknown>> = [];
+  let fetches = 0;
+  const result = await discoverProfessorCandidates({
+    profile: singleCountryProfile,
+    provider: { async search() { return [
+      { title: 'Network failure', url: 'https://university.example.edu/people/network?token=private', excerpt: 'Research profile result.' },
+      { title: 'HTTP failure', url: 'https://university.example.edu/people/missing', excerpt: 'Another research profile result.' },
+      { title: 'Duplicate URL', url: 'https://university.example.edu/people/missing#fragment', excerpt: 'Duplicate result.' },
+      { title: '', url: 'https://university.example.edu/people/invalid', excerpt: 'Missing title.' },
+    ]; } },
+    repository: { async list() { return []; }, async save() { assert.fail('failed or invalid candidates must not be saved'); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['university.example.edu'] },
+      resultsPerQuery: 4,
+      maxSearches: 1,
+      saveOnlyProfessorProfiles: true,
+      async fetchPage(url) {
+        fetches += 1;
+        if (url.includes('/people/network')) throw new SanitizedIntegrationError('network_error', {
+          resourceUrl: url, errorName: 'FetchError', errorCode: 'ECONNRESET', causeName: 'TypeError', causeCode: 'ECONNRESET',
+        });
+        throw new SanitizedIntegrationError('http_status', { resourceUrl: url, statusCode: 503, responseReceived: true });
+      },
+      onResultDiagnostic: (diagnostic) => { diagnostics.push(diagnostic); },
+    },
+  });
+
+  assert.equal(fetches, 2);
+  assert.deepEqual({ saved: result.saved, duplicates: result.duplicates, validationRejections: result.validationRejections, officialPageFetchFailures: result.officialPageFetchFailures }, {
+    saved: 0, duplicates: 1, validationRejections: 1, officialPageFetchFailures: 2,
+  });
+  assert.deepEqual(diagnostics.map(({ outcome, rejectionReasons, resourcePath, statusCode, errorName, errorCode, causeName, causeCode }) => Object.fromEntries(Object.entries({
+    outcome, rejectionReasons, resourcePath, statusCode, errorName, errorCode, causeName, causeCode,
+  }).filter(([, value]) => value !== undefined))), [
+    { outcome: 'fetch_failed', rejectionReasons: ['network_error'], resourcePath: '/people/network', errorName: 'FetchError', errorCode: 'ECONNRESET', causeName: 'TypeError', causeCode: 'ECONNRESET' },
+    { outcome: 'fetch_failed', rejectionReasons: ['http_status'], resourcePath: '/people/missing', statusCode: 503 },
+    { outcome: 'duplicate', rejectionReasons: [] },
+    { outcome: 'rejected', rejectionReasons: ['title'] },
+  ]);
+  assert.equal(JSON.stringify(diagnostics).includes('private'), false);
+  assert.equal(JSON.stringify(diagnostics).includes('?token'), false);
 });
 
 test('official URL normalization, deduplication and fetched evidence stay unverified until human review', async () => {
@@ -756,7 +806,7 @@ test('discovery does no search when the existing pool already meets the 200-cand
   });
   assert.equal(searches, 0);
   assert.deepEqual(result, {
-    searches: 0, saved: 0, rejected: 0,
+    searches: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0,
     rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 },
     poolSize: 200, targetReached: true,
   });

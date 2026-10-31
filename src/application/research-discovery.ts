@@ -358,7 +358,7 @@ export async function discoverProfessorCandidates(input: {
   provider: SearchProvider;
   repository: CandidateDiscoveryRepository;
   options: DiscoveryOptions;
-}): Promise<{ searches: number; saved: number; rejected: number; rejectedByCheck: { exactHost: number; title: number; excerpt: number }; poolSize: number; targetReached: boolean }> {
+}): Promise<{ searches: number; saved: number; rejected: number; duplicates: number; validationRejections: number; officialPageFetchFailures: number; rejectedByCheck: { exactHost: number; title: number; excerpt: number }; poolSize: number; targetReached: boolean }> {
   const targetPoolSize = input.options.targetPoolSize ?? 200;
   if (!Number.isInteger(targetPoolSize) || targetPoolSize < 1 || targetPoolSize > 200) {
     throw new Error('targetPoolSize must be an integer from 1 to 200');
@@ -370,7 +370,7 @@ export async function discoverProfessorCandidates(input: {
     .map((item) => canonicalizeSourceUrl(item.sourceUrl))));
   let poolSize = knownIds.size;
   if (poolSize >= targetPoolSize) {
-    return { searches: 0, saved: 0, rejected: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: true };
+    return { searches: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: true };
   }
   const regions = [...new Set(input.profile.applicant.target.countries.map((country) => country.trim()).filter(Boolean))];
   if (regions.length === 0) throw new Error('At least one configured target country is required for discovery');
@@ -381,6 +381,9 @@ export async function discoverProfessorCandidates(input: {
   let searches = 0;
   let saved = 0;
   let rejected = 0;
+  let duplicates = 0;
+  let validationRejections = 0;
+  let officialPageFetchFailures = 0;
   const rejectedByCheck = { exactHost: 0, title: 0, excerpt: 0 };
   const seenUrls = new Set<string>(knownUrls);
   const maxSearches = input.options.maxSearches ?? Number.POSITIVE_INFINITY;
@@ -395,6 +398,11 @@ export async function discoverProfessorCandidates(input: {
         if (searches >= maxSearches) break discovery;
         const query = queryFor(region, interest, matchingHosts);
         const recordRejection = async (checks: RejectedSearchResultChecks) => {
+          rejected += 1;
+          validationRejections += 1;
+          if (checks.exactHost) rejectedByCheck.exactHost += 1;
+          if (checks.title) rejectedByCheck.title += 1;
+          if (checks.excerpt) rejectedByCheck.excerpt += 1;
           await input.options.onRejectedResult?.(checks);
           await input.options.onResultDiagnostic?.({
             country: region,
@@ -422,21 +430,19 @@ export async function discoverProfessorCandidates(input: {
             hostname: diagnosticResultHostname(result.url),
           };
           if (failedChecks.exactHost || failedChecks.title || failedChecks.excerpt) {
-            rejected += 1;
-            if (failedChecks.exactHost) rejectedByCheck.exactHost += 1;
-            if (failedChecks.title) rejectedByCheck.title += 1;
-            if (failedChecks.excerpt) rejectedByCheck.excerpt += 1;
             await recordRejection(failedChecks);
             continue;
           }
           const canonicalUrl = canonicalizeSourceUrl(result.url);
           if (seenUrls.has(canonicalUrl)) {
+            duplicates += 1;
             await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'duplicate', rejectionReasons: [] });
             continue;
           }
           seenUrls.add(canonicalUrl);
           const candidate = candidateFor(result, canonicalUrl, region, query, retrievedAt);
           if (knownIds.has(candidate.id)) {
+            duplicates += 1;
             await input.options.onResultDiagnostic?.({ country: region, hostname: failedChecks.hostname, outcome: 'duplicate', rejectionReasons: [] });
             continue;
           }
@@ -445,11 +451,18 @@ export async function discoverProfessorCandidates(input: {
           } catch (error) {
             // A bad or unavailable official page rejects this lead, but should not discard later results.
             if (error instanceof SanitizedIntegrationError) {
+              officialPageFetchFailures += 1;
               await input.options.onResultDiagnostic?.({
                 country: region,
-                hostname: failedChecks.hostname,
-                outcome: 'rejected',
+                hostname: error.failure.resourceHost ?? failedChecks.hostname,
+                outcome: 'fetch_failed',
                 rejectionReasons: [error.failure.kind],
+                ...(error.failure.resourcePath ? { resourcePath: error.failure.resourcePath } : {}),
+                ...(error.failure.statusCode ? { statusCode: error.failure.statusCode } : {}),
+                ...(error.failure.errorName ? { errorName: error.failure.errorName } : {}),
+                ...(error.failure.errorCode ? { errorCode: error.failure.errorCode } : {}),
+                ...(error.failure.causeName ? { causeName: error.failure.causeName } : {}),
+                ...(error.failure.causeCode ? { causeCode: error.failure.causeCode } : {}),
               });
               continue;
             }
@@ -462,6 +475,7 @@ export async function discoverProfessorCandidates(input: {
           if (input.options.saveOnlyProfessorProfiles &&
               (candidate.leadType !== 'professor_profile' || !candidate.officialProfileUrl || !professorEvidence)) {
             rejected += 1;
+            validationRejections += 1;
             await input.options.onResultDiagnostic?.({
               country: region,
               hostname: failedChecks.hostname,
@@ -480,5 +494,5 @@ export async function discoverProfessorCandidates(input: {
       }
     }
   }
-  return { searches, saved, rejected, rejectedByCheck, poolSize, targetReached: poolSize >= targetPoolSize };
+  return { searches, saved, rejected, duplicates, validationRejections, officialPageFetchFailures, rejectedByCheck, poolSize, targetReached: poolSize >= targetPoolSize };
 }
