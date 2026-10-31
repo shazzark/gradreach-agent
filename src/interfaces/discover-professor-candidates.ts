@@ -13,10 +13,26 @@ import { loadApplicantProfile } from '../infrastructure/local-profile.ts';
 import { appendPhase3ResultDiagnostic, type Phase3ResultDiagnostic } from '../infrastructure/phase3-pilot-diagnostics.ts';
 import { BraveSearchProvider, type SearchProvider } from '../infrastructure/brave-search-provider.ts';
 import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
-import { safeFailureRecord } from '../infrastructure/sanitized-failure.ts';
+import { safeFailureRecord, SanitizedIntegrationError } from '../infrastructure/sanitized-failure.ts';
+
+export type DiscoveryRegion = keyof typeof OFFICIAL_HOSTS_BY_REGION;
+
+const COUNTRY_CODES_BY_REGION: Record<DiscoveryRegion, string> = {
+  Australia: 'AU',
+  Canada: 'CA',
+  China: 'CN',
+  Italy: 'IT',
+  Japan: 'JP',
+  'New Zealand': 'NZ',
+  'South Korea': 'KR',
+  Switzerland: 'CH',
+  Portugal: 'PT',
+  'United States': 'US',
+};
 
 export type DiscoveryRunnerStage =
   | 'mongodb_connect'
+  | 'pilot_configuration'
   | 'profile_load'
   | 'candidate_read'
   | 'brave_search'
@@ -29,25 +45,30 @@ interface DiscoveryRunnerStorage {
   close(): Promise<void>;
 }
 
-export async function runSouthKoreaProfessorPilot(input: {
+export interface DiscoveryRunnerInput {
   connect?: () => Promise<DiscoveryRunnerStorage>;
   loadProfile?: () => Promise<ApplicantProfile>;
   provider?: SearchProvider;
   fetchPage?: DiscoveryOptions['fetchPage'];
   recordDiagnostic?: (diagnostic: Phase3ResultDiagnostic) => Promise<void>;
   onStage?: (stage: DiscoveryRunnerStage) => void;
-} = {}) {
+}
+
+export async function runDiscoveryPilot(region: DiscoveryRegion, input: DiscoveryRunnerInput = {}) {
   const onStage = input.onStage ?? (() => {});
   onStage('mongodb_connect');
   const storage = await (input.connect ?? connectMongoStorage)();
   try {
     onStage('profile_load');
     const loadedProfile = await (input.loadProfile ?? loadApplicantProfile)();
+    if (!loadedProfile.applicant.target.countries.includes(region)) {
+      throw new SanitizedIntegrationError('invalid_request');
+    }
     const profile = {
       ...loadedProfile,
       applicant: {
         ...loadedProfile.applicant,
-        target: { ...loadedProfile.applicant.target, countries: ['South Korea'] },
+        target: { ...loadedProfile.applicant.target, countries: [region] },
       },
     };
 
@@ -72,7 +93,7 @@ export async function runSouthKoreaProfessorPilot(input: {
       onStage('official_page_fetch');
       return input.fetchPage
         ? input.fetchPage(url)
-        : fetchOfficialPage(url, [...OFFICIAL_HOSTS_BY_REGION['South Korea']]);
+        : fetchOfficialPage(url, [...OFFICIAL_HOSTS_BY_REGION[region]]);
     };
     const recordDiagnostic = input.recordDiagnostic ?? appendPhase3ResultDiagnostic;
 
@@ -81,8 +102,8 @@ export async function runSouthKoreaProfessorPilot(input: {
       provider,
       repository,
       options: {
-        officialHostsByRegion: { 'South Korea': [...OFFICIAL_HOSTS_BY_REGION['South Korea']] },
-        countryCodesByRegion: { 'South Korea': 'KR' },
+        officialHostsByRegion: { [region]: [...OFFICIAL_HOSTS_BY_REGION[region]] },
+        countryCodesByRegion: { [region]: COUNTRY_CODES_BY_REGION[region] },
         resultsPerQuery: 3,
         oneSearchPerRegion: true,
         maxSearches: 1,
@@ -99,12 +120,22 @@ export async function runSouthKoreaProfessorPilot(input: {
   }
 }
 
+export function runSouthKoreaProfessorPilot(input: DiscoveryRunnerInput = {}) {
+  return runDiscoveryPilot('South Korea', input);
+}
+
 async function run(): Promise<void> {
-  let stage: DiscoveryRunnerStage = 'mongodb_connect';
+  let stage: DiscoveryRunnerStage = 'pilot_configuration';
   try {
-    const result = await runSouthKoreaProfessorPilot({ onStage: (current) => { stage = current; } });
+    const selectedRegion = process.argv.find((argument) => argument.startsWith('--region='))?.slice('--region='.length);
+    if (!selectedRegion || !Object.hasOwn(OFFICIAL_HOSTS_BY_REGION, selectedRegion)) {
+      throw new SanitizedIntegrationError('invalid_request');
+    }
+    const region = selectedRegion as DiscoveryRegion;
+    const result = await runDiscoveryPilot(region, { onStage: (current) => { stage = current; } });
     process.stdout.write(`${JSON.stringify({
       ok: true,
+      region,
       searches: result.searches,
       saved: result.saved,
       duplicates: result.duplicates,
