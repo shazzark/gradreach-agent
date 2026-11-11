@@ -35,6 +35,7 @@ export interface CandidatePreviewOutcome {
   resultNumber: number;
   name: string;
   identityVerified: boolean;
+  identityConfirmed: boolean;
   outcome: 'passed' | 'stopped';
   reasonCode: CandidatePreviewReason;
   officialProfileSource?: string;
@@ -81,8 +82,10 @@ export interface DiscoveryOptions {
   onResultDiagnostic?: (diagnostic: Phase3ResultDiagnostic) => void | Promise<void>;
   onRedirect?: (diagnostic: Phase3ResultDiagnostic) => void | Promise<void>;
   onOfficialPageFailure?: (failure: SafeFailureRecord) => void;
+  onOfficialPageFetch?: () => void | Promise<void>;
   /** Emits a minimized in-memory result for a local preview; callers decide how to store it. */
   onCandidatePreview?: (outcome: CandidatePreviewOutcome) => void | Promise<void>;
+  onCandidateSaved?: (candidateId: string, resultNumber: number) => void | Promise<void>;
   onCoverageStop?: (reason: 'search_request_budget_exhausted' | 'pagination_budget_exhausted' | 'pagination_metadata_unavailable' | 'page_inspection_budget_exhausted') => void;
 }
 
@@ -182,7 +185,7 @@ function queryFor(region: string, interest: string, hosts: string[], queryType: 
   return query;
 }
 
-function candidateFor(result: SearchResult, sourceUrl: string, region: string, query: string, retrievedAt: string): ProfessorCandidate {
+function candidateFor(result: SearchResult, sourceUrl: string, region: string, _query: string, retrievedAt: string): ProfessorCandidate {
   const id = `discovery-${createHash('sha256').update(sourceUrl).digest('hex').slice(0, 24)}`;
   const evidence: DiscoveryEvidence = {
     kind: 'search-result',
@@ -191,7 +194,8 @@ function candidateFor(result: SearchResult, sourceUrl: string, region: string, q
     retrievedAt,
     verification: 'unverified',
     region,
-    query,
+    // Search expressions can contain saved interests, so they are never persisted with candidates.
+    query: '',
   };
   return {
     id,
@@ -530,7 +534,7 @@ export async function fetchOfficialPage(
 }
 
 /** Follows bounded official faculty/profile/research links and stores extracted evidence unverified. */
-export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now' | 'maxResearchPagesPerProfile' | 'followSupplementaryLinks' | 'collectContactEmail' | 'onOfficialPageFailure' | 'onRedirect' | 'onProfessorEvidenceFailure' | 'onProfessorIdentity' | 'onProfessorTraversalDiagnostic'> & { pageFetchBudget?: { remaining: number } }): Promise<ProfessorCandidate> {
+export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hosts: string[], options: Pick<DiscoveryOptions, 'fetchPage' | 'now' | 'maxResearchPagesPerProfile' | 'followSupplementaryLinks' | 'collectContactEmail' | 'onOfficialPageFailure' | 'onOfficialPageFetch' | 'onRedirect' | 'onProfessorEvidenceFailure' | 'onProfessorIdentity' | 'onProfessorTraversalDiagnostic'> & { pageFetchBudget?: { remaining: number } }): Promise<ProfessorCandidate> {
   const traversal: ProfessorTraversalDiagnostics = {
     directoryPageFetched: false,
     sameHostProfileLinksFound: 0,
@@ -559,6 +563,7 @@ export async function enrichOfficialCandidate(candidate: ProfessorCandidate, hos
       options.pageFetchBudget.remaining -= 1;
     }
     try {
+      await options.onOfficialPageFetch?.();
       page = await fetchPage(url);
     } catch (error) {
       options.onOfficialPageFailure?.(safeFailureRecord(error, url));
@@ -768,7 +773,7 @@ export async function discoverProfessorCandidates(input: {
   provider: SearchProvider;
   repository: CandidateDiscoveryRepository;
   options: DiscoveryOptions;
-}): Promise<{ searches: number; saved: number; rejected: number; duplicates: number; validationRejections: number; officialPageFetchFailures: number; rejectedByCheck: { exactHost: number; title: number; excerpt: number }; poolSize: number; targetReached: boolean; skippedCountries: string[] }> {
+}): Promise<{ searches: number; results: number; saved: number; rejected: number; duplicates: number; validationRejections: number; officialPageFetchFailures: number; rejectedByCheck: { exactHost: number; title: number; excerpt: number }; poolSize: number; targetReached: boolean; skippedCountries: string[] }> {
   const targetPoolSize = input.options.targetPoolSize ?? 200;
   if (!Number.isInteger(targetPoolSize) || targetPoolSize < 1 || targetPoolSize > 200) {
     throw new Error('targetPoolSize must be an integer from 1 to 200');
@@ -788,10 +793,10 @@ export async function discoverProfessorCandidates(input: {
   const skippedCountries = regions.filter((region) => !input.options.officialHostsByRegion[region]?.length);
   const eligibleRegions = regions.filter((region) => input.options.officialHostsByRegion[region]?.length);
   if (poolSize >= targetPoolSize) {
-    return { searches: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: true, skippedCountries };
+    return { searches: 0, results: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: true, skippedCountries };
   }
   if (eligibleRegions.length === 0) {
-    return { searches: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: false, skippedCountries };
+    return { searches: 0, results: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0, rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 }, poolSize, targetReached: false, skippedCountries };
   }
   const interests = [...new Set([...input.profile.applicant.target.fields, ...input.profile.applicant.target.researchInterests]
     .map((item) => item.trim()).filter(Boolean))];
@@ -804,6 +809,7 @@ export async function discoverProfessorCandidates(input: {
   let duplicates = 0;
   let validationRejections = 0;
   let officialPageFetchFailures = 0;
+  let resultCount = 0;
   const maxPageFetches = input.options.maxPageFetchesPerRun ?? MAX_OFFICIAL_PAGE_FETCHES_PER_RUN;
   if (!Number.isInteger(maxPageFetches) || maxPageFetches < 1) throw new Error('maxPageFetchesPerRun must be a positive integer');
   const pageFetchBudget = { remaining: maxPageFetches };
@@ -869,6 +875,7 @@ export async function discoverProfessorCandidates(input: {
           ? await input.provider.searchPage(query, searchOptions)
           : { results: await input.provider.search(query, searchOptions), moreResultsAvailable: false, paginationKnown: true };
         const results = page.results;
+        resultCount += results.length;
         pagesFetched += 1;
         moreResultsAvailable = page.moreResultsAvailable;
         const retrievedAt = (input.options.now?.() ?? new Date()).toISOString();
@@ -893,6 +900,7 @@ export async function discoverProfessorCandidates(input: {
               resultNumber,
               name: identity?.name ?? candidate?.professorName ?? candidate?.name ?? result.title,
               identityVerified: Boolean(identity || candidate?.professorName),
+              identityConfirmed: Boolean(identity),
               outcome: reasonCode === 'passed_all_gates' ? 'passed' : 'stopped',
               reasonCode,
               ...(profileUrl ? { officialProfileSource: profileUrl } : {}),
@@ -1030,6 +1038,7 @@ export async function discoverProfessorCandidates(input: {
           await input.options.onResultDiagnostic?.({ resultNumber, stage: 'result_validation', country: region, hostname: failedChecks.hostname, outcome: 'page_validated', rejectionReasons: [], ...(professorTraversalDiagnostic ?? {}) });
           await emitPreview('passed_all_gates', candidate, verifiedIdentity, professorTraversalDiagnostic);
           await input.repository.save(candidate);
+          await input.options.onCandidateSaved?.(candidate.id, resultNumber);
           knownIds.add(candidate.id);
           poolSize += 1;
           saved += 1;
@@ -1049,5 +1058,5 @@ export async function discoverProfessorCandidates(input: {
       }
     }
   }
-  return { searches, saved, rejected, duplicates, validationRejections, officialPageFetchFailures, rejectedByCheck, poolSize, targetReached: poolSize >= targetPoolSize, skippedCountries };
+  return { searches, results: resultCount, saved, rejected, duplicates, validationRejections, officialPageFetchFailures, rejectedByCheck, poolSize, targetReached: poolSize >= targetPoolSize, skippedCountries };
 }

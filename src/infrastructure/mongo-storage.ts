@@ -150,6 +150,82 @@ export class AutomaticDiscoveryRunRepository {
   async finish(run: DiscoveryRun): Promise<void> {
     await this.collection.updateOne({ _id: run.id, 'run.state': 'running' }, { $set: { run, updatedAt: new Date() } });
   }
+  async recordDiagnostic(runId: string, diagnostic: NonNullable<DiscoveryRun['resultDiagnostics']>[number]): Promise<void> {
+    const safe = sanitizeStoredDiscoveryDiagnostic(diagnostic);
+    if (!safe) return;
+    const resultNumber = diagnostic.resultNumber;
+    await this.collection.updateOne(
+      { _id: runId, 'run.state': 'running', 'run.resultDiagnostics.resultNumber': resultNumber },
+      { $set: { 'run.resultDiagnostics.$': safe, updatedAt: new Date() } },
+    ).then(async (result) => {
+      if (result.matchedCount) return;
+      await this.collection.updateOne(
+        { _id: runId, 'run.state': 'running', 'run.resultDiagnostics.resultNumber': { $ne: resultNumber } },
+        { $push: { 'run.resultDiagnostics': safe } as never, $set: { updatedAt: new Date() } },
+      );
+    });
+  }
+  async recordCountryOutcome(runId: string, outcome: NonNullable<DiscoveryRun['countryOutcomes']>[number]): Promise<void> {
+    if (runId.length > 512 || !outcome.country.trim() || outcome.country.length > 80 || outcome.runId.length > 512) return;
+    const current = await this.collection.findOne({ _id: runId, 'run.state': 'running' }, { projection: { 'run.countryOutcomes': 1 } });
+    if (!current) return;
+    const outcomes = current.run.countryOutcomes ?? [];
+    const updated = [...outcomes.filter((item) => item.country !== outcome.country), outcome];
+    await this.collection.updateOne({ _id: runId, 'run.state': 'running' }, { $set: { 'run.countryOutcomes': updated, updatedAt: new Date() } });
+  }
+  async recordProgress(runId: string, counts: DiscoveryRun['counts']): Promise<void> {
+    const bounded = Object.fromEntries(Object.entries(counts).filter(([key, value]) =>
+      ['searches', 'results', 'saved', 'duplicates', 'rejections', 'fetchFailures', 'inspected', 'inspectionFailures', 'pageFetches', 'professorsSaved', 'leadsSaved'].includes(key) && Number.isInteger(value) && value >= 0,
+    ));
+    await this.collection.updateOne({ _id: runId, 'run.state': 'running' }, { $set: { 'run.counts': bounded, updatedAt: new Date() } });
+  }
+  async recoverInterrupted(before: string, finishedAt: string): Promise<number> {
+    const result = await this.collection.updateMany(
+      { 'run.state': 'running', 'run.scheduledFor': { $lt: before } },
+      { $set: { 'run.state': 'failed', 'run.failureCode': 'worker_interrupted', 'run.completedAt': finishedAt, updatedAt: new Date() } },
+    );
+    return result.modifiedCount;
+  }
+}
+
+const STORED_DISCOVERY_REASONS = new Set(['exact_host', 'title', 'excerpt', 'duplicate', 'passed_evidence_gates', 'timeout', 'dns_tls', 'rate_limited', 'http_status', 'rejected_redirect', 'disallowed_host', 'invalid_content', 'network_error', 'mongodb_server_error', 'invalid_request', 'missing_configuration', 'not_professor_profile', 'no_named_professor_identity', 'no_official_research_evidence', 'research_interest_mismatch', 'invalid_search_result', 'duplicate_saved_lead', 'duplicate_official_profile', 'official_page_fetch_failed', 'page_fetch_limit', 'identity_not_established', 'research_evidence_missing', 'passed_all_gates']);
+function sanitizeStoredDiscoveryDiagnostic(value: NonNullable<DiscoveryRun['resultDiagnostics']>[number]): NonNullable<DiscoveryRun['resultDiagnostics']>[number] | undefined {
+  if (!Number.isInteger(value.resultNumber) || value.resultNumber < 1 || value.resultNumber > 3 || !STORED_DISCOVERY_REASONS.has(value.reason)) return undefined;
+  const savedRecords = (Array.isArray(value.savedRecords) ? value.savedRecords : []).slice(0, 2).flatMap((item) =>
+    (item.kind === 'confirmed_professor' || item.kind === 'qualified_lead') && /^[A-Za-z0-9:_-]{1,160}$/.test(item.id)
+      ? [{ kind: item.kind, id: item.id }] : []);
+  const safeCount = (count: number | undefined, max: number) => Number.isInteger(count) && count! >= 0 && count! <= max ? count : undefined;
+  const selected = <TReason extends string>(items: Array<{ rank: number; reasons: TReason[] }>, maxRank: number, allowed: readonly TReason[]) => items.slice(0, maxRank).flatMap((item) => {
+    const reasons = item.reasons.filter((reason) => allowed.includes(reason)).slice(0, 6);
+    return Number.isInteger(item.rank) && item.rank >= 1 && item.rank <= maxRank && reasons.length ? [{ rank: item.rank, reasons }] : [];
+  });
+  const rejections = (items: Array<{ reason: string; count: number }> | undefined, allowed: string[]) => (items ?? []).slice(0, 2).flatMap((item) =>
+    allowed.includes(item.reason) && Number.isInteger(item.count) && item.count >= 1 && item.count <= 100 ? [item] : []);
+  return {
+    resultNumber: value.resultNumber,
+    stage: ['result_validation', 'professor_evidence', 'official_page_fetch', 'duplicate_check', 'interest_match'].includes(value.stage) ? value.stage : 'result_validation',
+    reason: value.reason,
+    ...(value.observedHostname && /^[a-z0-9.-]{1,253}$/.test(value.observedHostname) ? { observedHostname: value.observedHostname } : {}),
+    ...(typeof value.directoryPageFetched === 'boolean' ? { directoryPageFetched: value.directoryPageFetched } : {}),
+    ...(safeCount(value.sameHostProfileLinksFound, 100) !== undefined ? { sameHostProfileLinksFound: value.sameHostProfileLinksFound } : {}),
+    ...(safeCount(value.sameHostProfileLinksConsidered, 100) !== undefined ? { sameHostProfileLinksConsidered: value.sameHostProfileLinksConsidered } : {}),
+    ...(safeCount(value.sameHostProfileLinksFetched, 10) !== undefined ? { sameHostProfileLinksFetched: value.sameHostProfileLinksFetched } : {}),
+    ...(value.selectedProfileLinks?.length ? { selectedProfileLinks: selected(value.selectedProfileLinks, 10, ['named_link_text', 'named_faculty_context', 'profile_url_pattern', 'faculty_card_context', 'profile_label', 'academic_role']) } : {}),
+    ...(typeof value.professorIdentityEstablished === 'boolean' ? { professorIdentityEstablished: value.professorIdentityEstablished } : {}),
+    ...(safeCount(value.linkedResearchPagesConsidered, 100) !== undefined ? { linkedResearchPagesConsidered: value.linkedResearchPagesConsidered } : {}),
+    ...(safeCount(value.linkedResearchPagesFound, 100) !== undefined ? { linkedResearchPagesFound: value.linkedResearchPagesFound } : {}),
+    ...(safeCount(value.linkedResearchPagesFetched, 5) !== undefined ? { linkedResearchPagesFetched: value.linkedResearchPagesFetched } : {}),
+    ...(value.linkedResearchPagesSelected?.length ? { linkedResearchPagesSelected: selected(value.linkedResearchPagesSelected, 5, ['research_anchor_text', 'research_url_pattern', 'research_section_context']) } : {}),
+    ...(rejections(value.profileLinkRejections, ['excluded_navigation_or_nonacademic', 'insufficient_profile_signals']).length ? { profileLinkRejections: rejections(value.profileLinkRejections, ['excluded_navigation_or_nonacademic', 'insufficient_profile_signals']) as NonNullable<NonNullable<DiscoveryRun['resultDiagnostics']>[number]['profileLinkRejections']> } : {}),
+    ...(rejections(value.researchPageLinkRejections, ['non_research_destination', 'no_research_signal']).length ? { researchPageLinkRejections: rejections(value.researchPageLinkRejections, ['non_research_destination', 'no_research_signal']) as NonNullable<NonNullable<DiscoveryRun['resultDiagnostics']>[number]['researchPageLinkRejections']> } : {}),
+    ...(typeof value.relevantOfficialResearchEvidenceEstablished === 'boolean' ? { relevantOfficialResearchEvidenceEstablished: value.relevantOfficialResearchEvidenceEstablished } : {}),
+    ...(typeof value.identityConfirmed === 'boolean' ? { identityConfirmed: value.identityConfirmed } : {}),
+    ...(typeof value.researchEvidenceFound === 'boolean' ? { researchEvidenceFound: value.researchEvidenceFound } : {}),
+    ...(typeof value.interestMatched === 'boolean' || value.interestMatched === null ? { interestMatched: value.interestMatched } : {}),
+    ...(savedRecords.length ? { savedRecords } : {}),
+    ...(Number.isInteger(value.statusCode) && value.statusCode! >= 100 && value.statusCode! <= 599 ? { statusCode: value.statusCode } : {}),
+    ...(value.networkCode && /^[A-Z0-9_]{1,40}$/.test(value.networkCode) ? { networkCode: value.networkCode } : {}),
+  };
 }
 
 export class AutomaticDiscoveryEvidenceCheckRepository {

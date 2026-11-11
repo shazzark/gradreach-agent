@@ -110,6 +110,37 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(serializedRun.includes('query-canary'), false);
     assert.equal(serializedRun.includes('profile-canary'), false);
 
+    stage = 'discovery_incremental_restart_storage';
+    const interruptedRun = {
+      ...discoveryRun, id: 'synthetic-interrupted-run', scheduledFor: '2026-10-21T09:00:00.000Z', slotId: 'synthetic-slot',
+      trigger: 'scheduled' as const, runKind: 'country' as const, workerId: 'synthetic-worker', taskName: 'Synthetic Task',
+      country: 'Synthetic country', state: 'running' as const, resultDiagnostics: [],
+    };
+    assert.equal(await repositories.discoveryRuns.claim(interruptedRun), true);
+    const durableDiagnostic = { resultNumber: 1, stage: 'professor_evidence' as const, reason: 'no_official_research_evidence', identityConfirmed: true, researchEvidenceFound: false, interestMatched: null, sameHostProfileLinksFetched: 2, savedRecords: [{ kind: 'confirmed_professor' as const, id: 'synthetic-professor' }] };
+    await repositories.discoveryRuns.recordDiagnostic(interruptedRun.id, durableDiagnostic);
+    await repositories.discoveryRuns.recordDiagnostic(interruptedRun.id, durableDiagnostic);
+    await repositories.discoveryRuns.recordDiagnostic(interruptedRun.id, { ...durableDiagnostic, reason: 'token-canary' } as never);
+    await repositories.discoveryRuns.recordProgress(interruptedRun.id, { ...interruptedRun.counts, searches: 1, results: 2, pageFetches: 3 });
+    const countryOutcome = { country: 'Synthetic country', runId: interruptedRun.id, state: 'completed' as const, counts: interruptedRun.counts };
+    const { country: _country, ...batchBase } = interruptedRun;
+    const syntheticBatch = { ...batchBase, id: 'synthetic-incremental-batch', scheduledFor: '2026-10-23T09:00:00.000Z', countries: ['Synthetic country'], runKind: 'batch' as const, countryOutcomes: [], state: 'running' as const };
+    assert.equal(await repositories.discoveryRuns.claim(syntheticBatch), true);
+    await repositories.discoveryRuns.recordCountryOutcome(syntheticBatch.id, { ...countryOutcome, state: 'failed' });
+    await repositories.discoveryRuns.recordCountryOutcome(syntheticBatch.id, { ...countryOutcome, state: 'failed' });
+    const durableBatch = await repositories.discoveryRuns.list(10);
+    const batchRecord = durableBatch.find((item) => item.id === syntheticBatch.id);
+    assert.equal(batchRecord?.countryOutcomes?.length, 1);
+    assert.deepEqual(await repositories.discoveryRuns.recoverInterrupted('2026-10-22T00:00:00.000Z', '2026-10-22T00:00:01.000Z'), 1);
+    const recovered = (await repositories.discoveryRuns.list(10)).find((item) => item.id === interruptedRun.id)!;
+    assert.equal(recovered.state, 'failed');
+    assert.equal(recovered.failureCode, 'worker_interrupted');
+    assert.deepEqual(recovered.resultDiagnostics, [durableDiagnostic]);
+    assert.equal(recovered.counts.searches, 1);
+    assert.equal(recovered.counts.results, 2);
+    assert.equal(JSON.stringify(recovered).includes('query-canary'), false);
+    assert.equal(JSON.stringify(recovered).includes('token-canary'), false);
+
     stage = 'saved_lead_reprocessing_run_storage';
     const reprocessRun = {
       id: 'synthetic-reprocess-run', state: 'running' as const, startedAt: '2026-10-20T10:00:00.000Z',

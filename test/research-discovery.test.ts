@@ -187,12 +187,14 @@ test('single-search region mode searches all reviewed hosts in one bounded query
     },
   });
   assert.equal(result.searches, 1);
+  assert.equal(result.results, 2);
   assert.equal(result.saved, 2);
   assert.deepEqual(queried, [{
     query: '(site:first.university.example.edu OR site:second.university.example.edu) (faculty directory OR professor profile) research Computer Science MSc Country A',
     count: 3,
   }]);
   assert.ok(saved.every((candidate) => candidate.institution === '' && candidate.country === ''));
+  assert.ok(saved.every((candidate) => candidate.discoveryEvidence?.filter((item) => item.kind === 'search-result').every((item) => item.query === '')));
   assert.ok(saved.every((candidate) => candidate.status === 'needs-evidence' && !candidate.approvedForSending));
 });
 
@@ -1421,7 +1423,7 @@ test('discovery does no search when the existing pool already meets the 200-cand
   });
   assert.equal(searches, 0);
   assert.deepEqual(result, {
-    searches: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0,
+    searches: 0, results: 0, saved: 0, rejected: 0, duplicates: 0, validationRejections: 0, officialPageFetchFailures: 0,
     rejectedByCheck: { exactHost: 0, title: 0, excerpt: 0 },
     poolSize: 200, targetReached: true, skippedCountries: ['Country A', 'Country B'],
   });

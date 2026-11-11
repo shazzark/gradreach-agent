@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
-import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
+import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, selectNextDiscoveryBatch, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
 import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
 import { firstVerifiedTargetCountries, nextVerifiedTargetCountries } from '../src/domain/discovery-country-coverage.ts';
 
@@ -19,7 +19,7 @@ function candidate(id: string): ProfessorCandidate {
     leadType: 'professor_profile', officialProfileUrl: `https://www.kurims.kyoto-u.ac.jp/${id}`, status: 'needs-evidence', approvedForSending: false, priority: 0 };
 }
 
-function fakeRepos(candidates: ProfessorCandidate[], schedule: DiscoverySchedule) {
+function fakeRepos(candidates: ProfessorCandidate[], schedule: DiscoverySchedule, savedProfile = profile) {
   const runs = new Map<string, DiscoveryRun>();
   const checks = new Map<string, unknown>();
   let candidateSaves = 0;
@@ -27,7 +27,7 @@ function fakeRepos(candidates: ProfessorCandidate[], schedule: DiscoverySchedule
   return {
     repositories: {
       candidates: { async list() { return candidates; }, async save() { candidateSaves += 1; } },
-      profile: { async get() { return profile; } },
+      profile: { async get() { return savedProfile; } },
       schedule: { async get() { return savedSchedule; }, async save(value: DiscoverySchedule) { savedSchedule = structuredClone(value); } },
       runs: { async list(limit: number) { return [...runs.values()].slice(0, limit); }, async claim(run: DiscoveryRun) { if (runs.has(run.id)) return false; runs.set(run.id, run); return true; }, async finish(run: DiscoveryRun) { runs.set(run.id, run); } },
       checks: { async has(id: string, runId: string) { return checks.has(`${runId}:${id}`); }, async list(limit: number) { return [...checks.values()].slice(0, limit) as never[]; }, async save(check: { id: string }) { checks.set(check.id, check); }, },
@@ -122,11 +122,73 @@ test('scheduled discovery persists only bounded result rejection diagnostics wit
     now: new Date('2026-11-04T08:00:00.000Z'),
   });
   assert.equal(result.state, 'completed');
-  assert.deepEqual(result.resultDiagnostics, [{ resultNumber: 1, stage: 'result_validation', reason: 'exact_host', observedHostname: 'outside.example.org' }]);
+  assert.deepEqual(result.resultDiagnostics, [{ resultNumber: 1, stage: 'result_validation', reason: 'exact_host', observedHostname: 'outside.example.org', identityConfirmed: false, researchEvidenceFound: false, interestMatched: null }]);
   const stored = data.runs.get('discovery:2026-11-04T09:00[Africa/Lagos]');
   assert.deepEqual(stored?.resultDiagnostics, result.resultDiagnostics);
   assert.equal(JSON.stringify(stored).includes('query-canary'), false);
   assert.equal(JSON.stringify(stored).includes('Synthetic result'), false);
+});
+
+test('one-sweep daily run claims up to five saved-order countries with one search each', async () => {
+  const countries = ['Belgium', 'Bosnia and Herzegovina', 'Bulgaria', 'Croatia', 'Czechia', 'Denmark', 'Estonia'];
+  const savedProfile = { ...profile, applicant: { ...profile.applicant, target: { ...profile.applicant.target, countries } } };
+  const data = fakeRepos([], { ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: false, sweepOnce: true,
+    frequency: 'daily', countries: countries.slice(0, 5) }, savedProfile);
+  const searched: string[] = [];
+  const input = {
+    repositories: data.repositories,
+    configuredCountries: countries,
+    verifiedCountries: countries,
+    officialHostsByRegion: Object.fromEntries(countries.map((country) => [country, [...OFFICIAL_HOSTS_BY_REGION[country as keyof typeof OFFICIAL_HOSTS_BY_REGION]]])),
+    countryCodesByRegion: { Belgium: 'BE', 'Bosnia and Herzegovina': 'BA', Bulgaria: 'BG', Croatia: 'HR', Czechia: 'CZ', Denmark: 'DK', Estonia: 'EE' },
+    provider: { async search(_query: string, options?: { region?: string; count?: number }) {
+      assert.equal(options?.count, 3);
+      searched.push(options?.region ?? '');
+      if (options?.region === 'Bulgaria') throw new Error('synthetic provider failure');
+      return [];
+    } },
+    fetchPage: async (url: string) => ({ url, html: '' }),
+    now: new Date('2026-11-04T08:00:00.000Z'),
+  };
+  const result = await runAutomaticDiscovery(input);
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(result.countries, countries.slice(0, 5));
+  assert.deepEqual(searched, countries.slice(0, 5));
+  assert.equal(result.counts.searches, 5);
+  assert.deepEqual(result.countryOutcomes?.map(({ country, state }) => ({ country, state })), [
+    { country: 'Belgium', state: 'completed' },
+    { country: 'Bosnia and Herzegovina', state: 'completed' },
+    { country: 'Bulgaria', state: 'failed' },
+    { country: 'Croatia', state: 'completed' },
+    { country: 'Czechia', state: 'completed' },
+  ]);
+  assert.equal(result.countryOutcomes?.find(({ country }) => country === 'Bulgaria')?.counts.searches, 1);
+  assert.deepEqual(data.schedule.countries, countries.slice(5));
+  assert.equal(data.runs.get(`discovery:${discoverySlot(data.schedule, input.now)!}`)?.state, 'completed');
+
+  assert.equal((await runAutomaticDiscovery(input)).state, 'duplicate');
+  assert.deepEqual(searched, countries.slice(0, 5), 'a repeated slot must not search again');
+  const finalRun = await runAutomaticDiscovery({ ...input, now: new Date('2026-11-05T08:00:00.000Z') });
+  assert.equal(finalRun.state, 'completed');
+  assert.deepEqual(finalRun.countries, countries.slice(5));
+  assert.deepEqual(searched, countries, 'the failed country must not be retried');
+  assert.equal(data.schedule.enabled, false);
+  assert.equal(data.schedule.paused, true);
+  assert.deepEqual(data.schedule.countries, []);
+});
+
+test('dry-run batch selection skips prior attempts and fills the next five in saved order', () => {
+  const configured = ['Belgium', 'Bosnia and Herzegovina', 'Bulgaria', 'Croatia', 'Czechia', 'Denmark', 'Estonia'];
+  const schedule = { ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: false, sweepOnce: true,
+    frequency: 'daily' as const, countries: configured.slice(0, 5) };
+  const previous: DiscoveryRun[] = [
+    { id: 'old-1', scheduledFor: '', startedAt: '', country: 'Belgium', state: 'failed', counts: { searches: 0, results: 0, saved: 0, duplicates: 0, rejections: 0, fetchFailures: 0, inspected: 0, inspectionFailures: 0 } },
+    { id: 'old-2', scheduledFor: '', startedAt: '', country: 'Bosnia and Herzegovina', state: 'completed', counts: { searches: 0, results: 0, saved: 0, duplicates: 0, rejections: 0, fetchFailures: 0, inspected: 0, inspectionFailures: 0 } },
+    { id: 'interrupted-batch', scheduledFor: '', startedAt: '', countries: configured.slice(0, 5), state: 'running', counts: { searches: 0, results: 0, saved: 0, duplicates: 0, rejections: 0, fetchFailures: 0, inspected: 0, inspectionFailures: 0 } },
+  ];
+  assert.deepEqual(selectNextDiscoveryBatch(schedule, configured, configured, previous), [
+    'Bulgaria', 'Croatia', 'Czechia', 'Denmark', 'Estonia',
+  ]);
 });
 
 test('automatic checks fail safely when no configured country has a verified host', async () => {

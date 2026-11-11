@@ -36,6 +36,7 @@ export async function runDiscoveryScheduler(): Promise<void> {
               schedule: storage.repositories.discoverySchedule,
               runs: storage.repositories.discoveryRuns,
               checks: storage.repositories.discoveryChecks,
+              confirmedProfessors: storage.repositories.confirmedProfessors,
             },
             configuredCountries: profile.applicant.target.countries,
             verifiedCountries: Object.keys(OFFICIAL_HOSTS_BY_REGION),
@@ -43,9 +44,11 @@ export async function runDiscoveryScheduler(): Promise<void> {
             officialHostsByRegion: hosts,
             countryCodesByRegion: COUNTRY_CODES,
             fetchPage: (url, allowed) => fetchOfficialPage(url, allowed),
+            taskName: 'GradReach Discovery Worker',
+            workerId: `GradReach Discovery Worker:${process.pid}`,
             onProgress: publishJobProgress,
           });
-          if (result.state !== 'not_due' && result.state !== 'paused') process.stdout.write(`${JSON.stringify({ state: result.state, country: 'country' in result ? result.country : undefined, targetingMode: 'targetingMode' in result ? result.targetingMode : undefined, counts: result.counts, failureCode: 'failureCode' in result ? result.failureCode : undefined })}\n`);
+          if (result.state !== 'not_due' && result.state !== 'paused') process.stdout.write(`${JSON.stringify({ state: result.state, countries: 'countries' in result ? result.countries : undefined, country: 'country' in result ? result.country : undefined, targetingMode: 'targetingMode' in result ? result.targetingMode : undefined, countryOutcomes: 'countryOutcomes' in result ? result.countryOutcomes : undefined, counts: result.counts, failureCode: 'failureCode' in result ? result.failureCode : undefined })}\n`);
         }
       } catch {
         process.stderr.write('Automatic discovery worker cycle failed; check local configuration and MongoDB/provider availability.\n');
