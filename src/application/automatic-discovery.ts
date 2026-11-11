@@ -21,6 +21,8 @@ export type DiscoveryFrequency = 'daily' | 'weekly';
 export interface DiscoverySchedule {
   enabled: boolean;
   paused: boolean;
+  /** Finite one-sweep operation; each terminal country attempt consumes one queue entry. */
+  sweepOnce?: boolean;
   frequency: DiscoveryFrequency;
   dayOfWeek: number;
   time: string;
@@ -86,6 +88,7 @@ export const DISCOVERY_LIMITS = { searchesPerRun: 1, resultsPerSearch: 3, inspec
 
 export function validateDiscoverySchedule(value: DiscoverySchedule, configuredCountries: string[]): DiscoverySchedule {
   if (typeof value.enabled !== 'boolean' || typeof value.paused !== 'boolean') throw new Error('enabled and paused must be booleans');
+  if (value.sweepOnce !== undefined && typeof value.sweepOnce !== 'boolean') throw new Error('sweepOnce must be a boolean');
   if (value.frequency !== 'daily' && value.frequency !== 'weekly') throw new Error('frequency must be daily or weekly');
   if (!Number.isInteger(value.dayOfWeek) || value.dayOfWeek < 0 || value.dayOfWeek > 6) throw new Error('dayOfWeek must be 0 through 6');
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value.time)) throw new Error('time must use HH:mm');
@@ -115,6 +118,33 @@ export interface AutomaticDiscoveryRepositories {
   schedule: { get(): Promise<DiscoverySchedule | undefined>; save(value: DiscoverySchedule): Promise<void> };
   runs: { list(limit: number): Promise<DiscoveryRun[]>; claim(run: DiscoveryRun): Promise<boolean>; finish(run: DiscoveryRun): Promise<void> };
   checks: { has(candidateId: string, runId: string): Promise<boolean>; list(limit: number): Promise<DiscoveryEvidenceCheck[]>; save(value: DiscoveryEvidenceCheck): Promise<void> };
+}
+
+const DISCOVERY_COUNTRY_BATCH_SIZE = 5;
+
+async function advanceDiscoverySchedule(input: {
+  repositories: AutomaticDiscoveryRepositories;
+  configuredCountries: string[];
+  verifiedCountries: string[];
+  completedCountry: string;
+}): Promise<void> {
+  const schedule = await input.repositories.schedule.get();
+  if (!schedule?.sweepOnce || !schedule.enabled || schedule.paused || !schedule.countries.includes(input.completedCountry)) return;
+
+  const remainingBatch = schedule.countries.filter((country) => country !== input.completedCountry).slice(0, DISCOVERY_COUNTRY_BATCH_SIZE);
+  if (remainingBatch.length > 0) {
+    await input.repositories.schedule.save({ ...schedule, countries: remainingBatch });
+    return;
+  }
+
+  const runs = await input.repositories.runs.list(100);
+  const attempted = new Set(runs.flatMap((run) => run.country ? [run.country] : []));
+  const nextBatch = input.configuredCountries
+    .filter((country) => input.verifiedCountries.includes(country) && !attempted.has(country))
+    .slice(0, DISCOVERY_COUNTRY_BATCH_SIZE);
+  await input.repositories.schedule.save(nextBatch.length > 0
+    ? { ...schedule, countries: nextBatch }
+    : { ...schedule, enabled: false, paused: true, countries: [] });
 }
 
 /** Runs a bounded, search-free evidence refresh for saved undecided leads. */
@@ -183,12 +213,12 @@ export async function runAutomaticDiscovery(input: {
   if (!current.enabled || current.paused) return { state: 'paused' as const, counts };
   const slot = discoverySlot(current, now);
   if (!slot) return { state: 'not_due' as const, counts };
-  const countries = current.countries.filter((country) => input.configuredCountries.includes(country) && input.verifiedCountries.includes(country));
+  const countries = current.countries.filter((country) => input.configuredCountries.includes(country) && input.verifiedCountries.includes(country)).slice(0, DISCOVERY_COUNTRY_BATCH_SIZE);
   if (countries.length === 0) return { state: 'failed' as const, counts, failureCode: 'no_verified_country' };
-  const previousRuns = await input.repositories.runs.list(100);
+  const previousRuns = current.sweepOnce ? [] : await input.repositories.runs.list(100);
   const priorCountry = previousRuns.find((run) => run.state === 'completed')?.country;
   const previousIndex = countries.indexOf(priorCountry ?? '');
-  const country = countries[previousIndex < 0 ? 0 : (previousIndex + 1) % countries.length]!;
+  const country = current.sweepOnce ? countries[0]! : countries[previousIndex < 0 ? 0 : (previousIndex + 1) % countries.length]!;
   const runId = `discovery:${slot}`;
   const run: DiscoveryRun = { id: runId, scheduledFor: slot, startedAt: now.toISOString(), country, state: 'running', counts };
   if (!await input.repositories.runs.claim(run)) return { state: 'duplicate' as const, counts };
@@ -235,12 +265,14 @@ export async function runAutomaticDiscovery(input: {
       onInspected: (completed) => publish('running', 'persisting_checks', completed, DISCOVERY_LIMITS.inspectionsPerRun) });
     const completed = { ...run, ...(targetingMode ? { targetingMode } : {}), state: 'completed' as const, completedAt: new Date().toISOString(), counts, resultDiagnostics };
     await input.repositories.runs.finish(completed);
+    await advanceDiscoverySchedule({ repositories: input.repositories, configuredCountries: input.configuredCountries, verifiedCountries: input.verifiedCountries, completedCountry: country });
     publish('completed', 'completed', 1, 1);
     return completed;
   } catch (error) {
     const failure = safeFailureRecord(error);
     const failed = { ...run, ...(targetingMode ? { targetingMode } : {}), state: 'failed' as const, completedAt: new Date().toISOString(), failureCode: failure.kind, counts, resultDiagnostics };
     await input.repositories.runs.finish(failed);
+    await advanceDiscoverySchedule({ repositories: input.repositories, configuredCountries: input.configuredCountries, verifiedCountries: input.verifiedCountries, completedCountry: country });
     publish('failed', 'failed', 1, 1);
     return failed;
   }

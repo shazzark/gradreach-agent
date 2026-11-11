@@ -23,14 +23,16 @@ function fakeRepos(candidates: ProfessorCandidate[], schedule: DiscoverySchedule
   const runs = new Map<string, DiscoveryRun>();
   const checks = new Map<string, unknown>();
   let candidateSaves = 0;
+  let savedSchedule = structuredClone(schedule);
   return {
     repositories: {
       candidates: { async list() { return candidates; }, async save() { candidateSaves += 1; } },
       profile: { async get() { return profile; } },
-      schedule: { async get() { return schedule; }, async save() {} },
+      schedule: { async get() { return savedSchedule; }, async save(value: DiscoverySchedule) { savedSchedule = structuredClone(value); } },
       runs: { async list(limit: number) { return [...runs.values()].slice(0, limit); }, async claim(run: DiscoveryRun) { if (runs.has(run.id)) return false; runs.set(run.id, run); return true; }, async finish(run: DiscoveryRun) { runs.set(run.id, run); } },
       checks: { async has(id: string, runId: string) { return checks.has(`${runId}:${id}`); }, async list(limit: number) { return [...checks.values()].slice(0, limit) as never[]; }, async save(check: { id: string }) { checks.set(check.id, check); }, },
     }, runs, checks, get candidateSaves() { return candidateSaves; },
+    get schedule() { return savedSchedule; },
   };
 }
 
@@ -80,7 +82,7 @@ test('pause blocks provider calls and a due run inspects at most five pages with
   const humanApproved = { ...candidate('approved-by-human'), status: 'approved' as const, approvedForSending: true, approvedAt: '2026-11-03T10:00:00.000Z' };
   savedCandidates.push(humanDecided, humanApproved);
   const before = structuredClone(savedCandidates);
-  const data = fakeRepos(savedCandidates, { ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: true, frequency: 'daily', countries: ['Japan'] });
+  const data = fakeRepos(savedCandidates, { ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: true, sweepOnce: true, frequency: 'daily', countries: ['Japan'] });
   let searches = 0;
   let fetches = 0;
   const common = {
@@ -94,13 +96,16 @@ test('pause blocks provider calls and a due run inspects at most five pages with
   };
   assert.equal((await runAutomaticDiscovery(common)).state, 'paused');
   assert.equal(searches, 0);
-  data.repositories.schedule.get = async () => ({ ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: false, frequency: 'daily', countries: ['Japan'] });
+  data.repositories.schedule.get = async () => ({ ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: false, sweepOnce: true, frequency: 'daily', countries: ['Japan'] });
   const run = await runAutomaticDiscovery(common);
   assert.equal(run.state, 'completed');
   assert.equal(run.targetingMode, 'query_and_host');
   assert.equal(searches, 1);
   assert.equal(fetches, 5);
   assert.equal(run.counts.inspected, 5);
+  assert.equal(data.schedule.enabled, false);
+  assert.equal(data.schedule.paused, true);
+  assert.deepEqual(data.schedule.countries, []);
   assert.equal(data.candidateSaves, 0);
   assert.deepEqual(savedCandidates, before);
   assert.deepEqual(savedCandidates.slice(-2), [humanDecided, humanApproved]);
