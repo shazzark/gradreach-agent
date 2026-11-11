@@ -156,7 +156,7 @@ test('source-backed scholarship and company opportunities stay distinct, pending
   });
   const company = parseProgramRecord({
     id: 'company-1', kind: 'company_graduate_program', institution: 'Example Tech', name: 'Graduate Engineer Programme', country: 'Exampleland', intake: '',
-    field: 'computer science', sourceEvidence: evidence, compensation: { summary: 'Salary range published in the official listing.', evidence },
+    field: 'computer science', sourceEvidence: { ...evidence, excerpt: 'Official source for a graduate opportunity in distributed systems.' }, compensation: { summary: 'Salary range published in the official listing.', evidence },
   });
   assert.equal(scholarship.kind, 'scholarship');
   assert.equal(company.kind, 'company_graduate_program');
@@ -168,6 +168,7 @@ test('source-backed scholarship and company opportunities stay distinct, pending
   const preferences = structuredClone(profile);
   preferences.applicant.target.countries = ['Exampleland'];
   preferences.applicant.target.fields = ['computer science'];
+  preferences.applicant.target.researchInterests = ['distributed systems'];
   assert.equal(assessOpportunityFit(company, preferences).outcome, 'potential_fit');
   assert.throws(() => parseProgramRecord({ ...company, id: 'missing-source', sourceEvidence: undefined }), /requires reviewed official sourceEvidence/);
 });

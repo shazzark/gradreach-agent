@@ -10,6 +10,7 @@ import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-col
 import { safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
+import type { OpportunityDiscoveryRun } from '../src/domain/opportunity-discovery.ts';
 import { assertMongoTestUri, getEnabledMongoTestUri } from './mongo-test-uri.ts';
 
 const mongoUri = getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEGRATION, uri: process.env.MONGODB_TEST_URI });
@@ -109,6 +110,26 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     const serializedRun = JSON.stringify(storedRun?.run);
     assert.equal(serializedRun.includes('query-canary'), false);
     assert.equal(serializedRun.includes('profile-canary'), false);
+
+    stage = 'opportunity_discovery_history_storage';
+    const opportunityRun: OpportunityDiscoveryRun = {
+      system: 'opportunity', id: 'opportunity_synthetic-run', trigger: 'manual', startedAt: '2026-10-22T08:00:00Z',
+      countries: ['Belgium'], state: 'running', counts: { searches: 1, results: 2, pagesFetched: 1, interestMatches: 1, saved: 0, duplicates: 0, rejected: 1, failures: 0 },
+      sources: [], stopReasons: [],
+    };
+    assert.equal(await repositories.opportunityDiscoveryRuns.claim(opportunityRun), true);
+    assert.equal(await repositories.opportunityDiscoveryRuns.claim(opportunityRun), false);
+    await repositories.opportunityDiscoveryRuns.recordSource(opportunityRun.id, {
+      country: 'Belgium', source: 'university', hosts: ['eng.kuleuven.be'], state: 'completed',
+      counts: { searches: 1, results: 2, pagesFetched: 1, interestMatches: 1, saved: 0, duplicates: 0, rejected: 1, failures: 0 }, stopReasons: ['no_interest_match'],
+    });
+    await repositories.opportunityDiscoveryRuns.finish({ ...opportunityRun, state: 'completed', completedAt: '2026-10-22T08:01:00Z' });
+    const savedOpportunityRun = (await repositories.opportunityDiscoveryRuns.list()).find((item) => item.id === opportunityRun.id);
+    assert.equal(savedOpportunityRun?.sources[0]?.country, 'Belgium');
+    assert.equal((await repositories.discoveryRuns.list(50)).some((item) => item.id === opportunityRun.id), false);
+    const opportunityRunJson = JSON.stringify(savedOpportunityRun);
+    assert.equal(opportunityRunJson.includes('private query'), false);
+    assert.equal(opportunityRunJson.includes('secret token'), false);
 
     stage = 'discovery_incremental_restart_storage';
     const interruptedRun = {

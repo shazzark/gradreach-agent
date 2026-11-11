@@ -1,4 +1,5 @@
 import type { ApplicantProfile } from './applicant-profile.ts';
+import { matchingResearchInterests } from './research-interest-match.ts';
 
 export type AssessmentOutcome = 'eligible' | 'unclear' | 'ineligible';
 export type OpportunityKind = 'msc_program' | 'scholarship' | 'company_graduate_program';
@@ -9,7 +10,7 @@ export interface OfficialEvidence {
   checkedAt: string;
   excerpt: string;
   uncertainty: string;
-  verification: 'reviewed';
+  verification: 'reviewed' | 'unreviewed';
 }
 
 export interface ProgramRecord {
@@ -52,6 +53,12 @@ export interface ProgramRecord {
   deadline?: { date: string; evidence: OfficialEvidence };
 }
 
+/** Stable identity complements source-URL comparison when two official pages describe the same opportunity. */
+export function canonicalizeOpportunityIdentity(program: ProgramRecord): string {
+  const normalize = (value: string) => value.toLocaleLowerCase('en').normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return [program.kind ?? 'msc_program', program.country, program.institution, program.name].map(normalize).join('|');
+}
+
 export interface AssessmentFinding {
   outcome: AssessmentOutcome;
   reasons: string[];
@@ -85,10 +92,14 @@ export function assessOpportunityFit(program: ProgramRecord, profile: ApplicantP
   if (fieldMatches) reasons.push('Field matches a saved preference.');
   else if (!fieldKnown || !fields.length) reasons.push('Field overlap is unknown because the record or saved preferences are incomplete.');
   else reasons.push('Field does not match a saved preference.');
+  const matchedInterests = program.sourceEvidence
+    ? matchingResearchInterests(program.sourceEvidence.excerpt, profile.applicant.target.researchInterests)
+    : [];
+  if (matchedInterests.length) reasons.push(`Official-source evidence matches ${matchedInterests.length} saved research interest${matchedInterests.length === 1 ? '' : 's'}.`);
+  else if (profile.applicant.target.researchInterests.length) reasons.push('No saved research-interest match is recorded in the official-source excerpt.');
   if (program.kind === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc')) reasons.push('Degree level is not stated.');
   const mismatch = (profile.applicant.target.countries.length > 0 && !country) || (fieldKnown && fields.length > 0 && !fieldMatches);
-  const incomplete = !fieldKnown || fields.length === 0 || !profile.applicant.target.countries.length || (program.kind === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc'));
-  return { outcome: mismatch ? 'not_a_fit' : incomplete ? 'unclear' : 'potential_fit', reasons };
+  return { outcome: mismatch ? 'not_a_fit' : matchedInterests.length ? 'potential_fit' : 'unclear', reasons };
 }
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -112,7 +123,7 @@ function numberValue(value: unknown, label: string): number {
   return value;
 }
 
-function parseEvidence(value: unknown, label: string): OfficialEvidence {
+function parseEvidence(value: unknown, label: string, allowUnreviewed = false): OfficialEvidence {
   const input = objectValue(value, label);
   const sourceUrl = textValue(input.sourceUrl, `${label}.sourceUrl`);
   try {
@@ -121,7 +132,7 @@ function parseEvidence(value: unknown, label: string): OfficialEvidence {
   } catch { throw new Error(`${label}.sourceUrl must be an HTTPS URL without credentials`); }
   const checkedAt = textValue(input.checkedAt, `${label}.checkedAt`);
   if (Number.isNaN(new Date(checkedAt).getTime())) throw new Error(`${label}.checkedAt must be a valid date`);
-  if (input.verification !== 'reviewed') throw new Error(`${label}.verification must be reviewed`);
+  if (input.verification !== 'reviewed' && !(allowUnreviewed && input.verification === 'unreviewed')) throw new Error(`${label}.verification must be reviewed`);
   return {
     sourceUrl, checkedAt,
     excerpt: nonEmptyText(input.excerpt, `${label}.excerpt`),
@@ -131,8 +142,9 @@ function parseEvidence(value: unknown, label: string): OfficialEvidence {
 }
 
 /** Validates program facts imported from a local file; each recorded fact must carry human-reviewed evidence. */
-export function parseProgramRecord(value: unknown): ProgramRecord {
+export function parseProgramRecord(value: unknown, options: { allowUnreviewedEvidence?: boolean } = {}): ProgramRecord {
   const input = objectValue(value, 'program');
+  const parseFactEvidence = (value: unknown, label: string) => parseEvidence(value, label, options.allowUnreviewedEvidence === true);
   const result: ProgramRecord = {
     id: nonEmptyText(input.id, 'program.id'),
     institution: nonEmptyText(input.institution, 'program.institution'),
@@ -145,7 +157,7 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
   result.kind = kind as OpportunityKind;
   if (input.field !== undefined) result.field = textValue(input.field, 'program.field');
   if (input.degree !== undefined) result.degree = textValue(input.degree, 'program.degree');
-  if (input.sourceEvidence !== undefined) result.sourceEvidence = parseEvidence(input.sourceEvidence, 'program.sourceEvidence');
+  if (input.sourceEvidence !== undefined) result.sourceEvidence = parseFactEvidence(input.sourceEvidence, 'program.sourceEvidence');
   if (input.lastCheckedAt !== undefined) {
     const checked = textValue(input.lastCheckedAt, 'program.lastCheckedAt');
     if (Number.isNaN(Date.parse(checked))) throw new Error('program.lastCheckedAt must be a valid date');
@@ -154,11 +166,11 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
   result.reviewStatus = 'pending';
   for (const field of ['fundingDetails', 'compensation'] as const) if (input[field] !== undefined) {
     const detail = objectValue(input[field], `program.${field}`);
-    result[field] = { summary: nonEmptyText(detail.summary, `program.${field}.summary`), evidence: parseEvidence(detail.evidence, `program.${field}.evidence`) };
+    result[field] = { summary: nonEmptyText(detail.summary, `program.${field}.summary`), evidence: parseFactEvidence(detail.evidence, `program.${field}.evidence`) };
   }
   if (input.eligibility !== undefined) {
     const eligibility = objectValue(input.eligibility, 'program.eligibility');
-    result.eligibility = { summary: nonEmptyText(eligibility.summary, 'program.eligibility.summary'), evidence: parseEvidence(eligibility.evidence, 'program.eligibility.evidence') };
+    result.eligibility = { summary: nonEmptyText(eligibility.summary, 'program.eligibility.summary'), evidence: parseFactEvidence(eligibility.evidence, 'program.eligibility.evidence') };
   }
   if ((input.kind !== undefined || result.kind !== 'msc_program') && !result.sourceEvidence) throw new Error('opportunity requires reviewed official sourceEvidence');
   if (input.admissions !== undefined) {
@@ -168,7 +180,7 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
     result.admissions = {
       ...(accepted === undefined ? {} : { minimumClassification: accepted }),
       ...(minimumGpa === undefined ? {} : { minimumGpa: { value: numberValue(minimumGpa.value, 'program.admissions.minimumGpa.value'), scale: numberValue(minimumGpa.scale, 'program.admissions.minimumGpa.scale') } }),
-      evidence: parseEvidence(item.evidence, 'program.admissions.evidence'),
+      evidence: parseFactEvidence(item.evidence, 'program.admissions.evidence'),
     };
   }
   if (input.english !== undefined) {
@@ -179,12 +191,12 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
         const test = objectValue(entry, `program.english.acceptedTests[${index}]`);
         return { name: nonEmptyText(test.name, `program.english.acceptedTests[${index}].name`), minimumScore: numberValue(test.minimumScore, `program.english.acceptedTests[${index}].minimumScore`) };
       }),
-      evidence: parseEvidence(item.evidence, 'program.english.evidence'),
+      evidence: parseFactEvidence(item.evidence, 'program.english.evidence'),
     };
   }
   if (input.tuition !== undefined) {
     const item = objectValue(input.tuition, 'program.tuition');
-    result.tuition = { amount: numberValue(item.amount, 'program.tuition.amount'), currency: textValue(item.currency, 'program.tuition.currency'), period: textValue(item.period, 'program.tuition.period'), evidence: parseEvidence(item.evidence, 'program.tuition.evidence') };
+    result.tuition = { amount: numberValue(item.amount, 'program.tuition.amount'), currency: textValue(item.currency, 'program.tuition.currency'), period: textValue(item.period, 'program.tuition.period'), evidence: parseFactEvidence(item.evidence, 'program.tuition.evidence') };
   }
   if (input.fundingRoutes !== undefined) {
     if (!Array.isArray(input.fundingRoutes)) throw new Error('program.fundingRoutes must be an array');
@@ -196,7 +208,7 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
         type: nonEmptyText(route.type, `program.fundingRoutes[${index}].type`),
         name: nonEmptyText(route.name, `program.fundingRoutes[${index}].name`),
         ...(eligibility === undefined ? {} : { applicantEligibility: eligibility as AssessmentOutcome }),
-        evidence: parseEvidence(route.evidence, `program.fundingRoutes[${index}].evidence`),
+        evidence: parseFactEvidence(route.evidence, `program.fundingRoutes[${index}].evidence`),
       };
     });
   }
@@ -204,7 +216,7 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
     const item = objectValue(input.deadline, 'program.deadline');
     const date = textValue(item.date, 'program.deadline.date');
     if (Number.isNaN(new Date(date).getTime())) throw new Error('program.deadline.date must be a valid date');
-    result.deadline = { date, evidence: parseEvidence(item.evidence, 'program.deadline.evidence') };
+    result.deadline = { date, evidence: parseFactEvidence(item.evidence, 'program.deadline.evidence') };
   }
   return result;
 }

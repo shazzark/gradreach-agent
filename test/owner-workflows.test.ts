@@ -160,14 +160,14 @@ test('approval workflow invokes the existing source and draft approval gate befo
   assert.equal(repoState.savedCandidate?.approvedDraftHash, approved?.approvedDraftHash);
 });
 
-test('program workflow stores only records accepted by the existing evidence validator and assessment service', async () => {
+test('program workflow validates imported evidence and leaves assessment until owner approval', async () => {
   const state: { savedProgram?: ProgramRecord; savedAssessment?: { overall: string } } = {};
   const repos = repositories(state);
   await importAndAssessProgram({ repositories: repos, profile, assessedAt: '2026-10-31T12:00:00Z', program: {
     id: 'program-1', institution: 'Example University', name: 'MSc Systems', country: 'Exampleland', intake: 'Fall 2027',
   } });
   assert.equal(state.savedProgram?.id, 'program-1');
-  assert.equal(state.savedAssessment?.overall, 'unclear');
+  assert.equal(state.savedAssessment, undefined);
   await assert.rejects(importAndAssessProgram({ repositories: repos, profile, program: {
     id: 'bad-program', institution: 'Example', name: 'MSc', country: 'Exampleland', intake: '',
     tuition: { amount: 10, currency: 'USD', period: 'year', evidence: { sourceUrl: 'https://example.edu', checkedAt: '2026-10-31T12:00:00Z', excerpt: 'Tuition is 10 USD yearly.', uncertainty: '', verification: 'unverified' } },
@@ -181,6 +181,7 @@ test('opportunity review requires certain official evidence and records owner de
   const repos = {
     programs: {
       async get() { return program; },
+      async save(value: ProgramRecord) { return { id: value.id, duplicate: false }; },
       async setReviewStatus(_id: string, value: string) { status = value; return true; },
     },
   } as unknown as GradReachRepositories;

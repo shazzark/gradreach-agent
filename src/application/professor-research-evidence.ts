@@ -2,6 +2,9 @@ import type { ProfessorCandidate } from '../domain/outreach-queue.ts';
 import type { ProfessorResearchEvidencePackage } from '../domain/professor-research-evidence.ts';
 import { OFFICIAL_HOSTS_BY_REGION, OFFICIAL_INSTITUTION_BY_REGION } from '../config/official-host-allowlist.ts';
 import { extractOfficialPageExcerpt, extractProfessorProfileEvidence } from './research-discovery.ts';
+import { matchingResearchInterests } from '../domain/research-interest-match.ts';
+
+export { matchingResearchInterests } from '../domain/research-interest-match.ts';
 
 export type { ProfessorResearchEvidencePackage } from '../domain/professor-research-evidence.ts';
 
@@ -26,27 +29,10 @@ export async function persistPreparedProfessorEvidence(input: {
   return saved;
 }
 
-const STOP_WORDS = new Set(['a', 'an', 'and', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'with', 'research', 'researches', 'work', 'works', 'study', 'studies', 'approach', 'approaches', 'systems', 'system']);
-
-export function matchingResearchInterests(quote: string, interests: string[]): string[] {
-  const quoteTokens = new Set(tokens(quote));
-  return [...new Set(interests.map((interest) => interest.trim()).filter(Boolean))].filter((interest) => {
-    const interestTokens = [...new Set(tokens(interest).filter((token) => !STOP_WORDS.has(token)))];
-    if (!interestTokens.length) return false;
-    const matched = interestTokens.filter((token) => quoteTokens.has(token)).length;
-    const required = interestTokens.length === 1 ? 1 : interestTokens.length === 2 ? 2 : Math.ceil(interestTokens.length * 2 / 3);
-    return matched >= required;
-  });
-}
-
 /** Rejects a project quote when it explicitly names a different investigator as its lead. */
 export function researchQuoteNamesOtherLead(quote: string, professorName: string): boolean {
   const match = quote.match(/\b(?:led|headed|directed)\s+by\s+(?:Dr\.?|Prof\.?|Professor)\s+([\p{Lu}][\p{L}.'’\-]+(?:\s+[\p{Lu}][\p{L}.'’\-]+){1,2})/iu);
   return Boolean(match?.[1] && normalizeName(match[1]) !== normalizeName(professorName));
-}
-
-function tokens(value: string): string[] {
-  return value.toLocaleLowerCase('en').match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
 export function prepareFetchedProfessorEvidence(input: {

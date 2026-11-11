@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
-import { importProgramAction, reassessProgramAction, reviewOpportunityAction } from '../../actions.ts';
-import { getOwnerWorkspace } from '../../../src/web/owner-data.ts';
+import { randomUUID } from 'node:crypto';
+import { discoverOpportunitiesAction, importProgramAction, reassessProgramAction, reviewOpportunityAction } from '../../actions.ts';
+import { getOwnerWorkspace, withOwnerData } from '../../../src/web/owner-data.ts';
 import { assessOpportunityFit } from '../../../src/domain/program-assessment.ts';
 import { previewSavedExcerpt } from '../../../src/web/lead-card-view.ts';
 import { safeOfficialSourceUrl } from '../../../src/web/safe-source-url.ts';
@@ -11,7 +12,9 @@ export const metadata: Metadata = { title: { absolute: 'GradReach | Programs' } 
 const facts = ['admissions', 'english', 'tuition', 'funding', 'intake', 'deadline'] as const;
 
 export default async function ProgramsPage({ searchParams }: { searchParams: Promise<{ country?: string; outcome?: string; q?: string; state?: string }> }) {
-  const [{ programs, assessments, profile }, query] = await Promise.all([getOwnerWorkspace(), searchParams]);
+  const [{ programs, assessments, profile }, opportunityRuns, query] = await Promise.all([
+    getOwnerWorkspace(), withOwnerData((repositories) => repositories.opportunityDiscoveryRuns.list(10)), searchParams,
+  ]);
   const latest = new Map(assessments.map((assessment) => [assessment.programId, assessment]));
   const countries = [...new Set(programs.map((program) => program.country).filter(Boolean))].sort();
   const outcomes = [...new Set(assessments.map((assessment) => assessment.overall))].sort();
@@ -25,6 +28,18 @@ export default async function ProgramsPage({ searchParams }: { searchParams: Pro
     <div className={ui.pageHead}><div><p className={ui.eyebrow}>Evidence-led comparison</p><h1 className={ui.pageTitle}>Programs</h1><p className={ui.pageDescription}>Review saved program records and their official-source assessment evidence.</p></div><span className={ui.tag}>{programs.length} saved {programs.length === 1 ? 'program' : 'programs'}</span></div>
     {query.state === 'unavailable' ? <p className={ui.warning} role="status">Program operation was not completed. Check the record's source fields and server configuration.</p> : query.state === 'saved' ? <p className={ui.note} role="status">Program record saved.</p> : null}
     {query.state === 'duplicate' ? <p className={ui.note} role="status">An opportunity with this official source is already saved; no duplicate record was created.</p> : null}
+    {query.state === 'discovered' ? <p className={ui.note} role="status">The manual opportunity discovery run finished. Review its saved run history below.</p> : null}
+
+    <section className={`${ui.panel} ${ui.section}`} aria-label="Manual opportunity discovery">
+      <div className={ui.cardTopline}><div><p className={ui.eyebrow}>Official sources only</p><h2 className={`${ui.sectionTitle} mb-0 mt-1`}>Discover opportunities</h2></div><span className={ui.tag}>Manual · up to 5 countries</span></div>
+      <p className="mt-3 text-sm text-muted">Searches the next manual run across the first five saved countries and verified university, scholarship-provider, and company-career hosts. Each source request returns at most three results. Pages are fetched once, and records are saved only when official-page evidence matches at least one saved research interest. No schedule or application action is enabled.</p>
+      {!profile.applicant.target.researchInterests.length ? <p className={ui.warning}>Add at least one saved research interest before discovering opportunities.</p> : null}
+      <form action={discoverOpportunitiesAction}><input type="hidden" name="requestId" value={randomUUID()}/><button className={ui.primaryButton} type="submit" disabled={!profile.applicant.target.researchInterests.length}>Discover official opportunities</button></form>
+    </section>
+
+    <section className={`${ui.section}`} aria-label="Opportunity discovery history"><div className="mb-3 flex items-end justify-between gap-2"><h2 className={ui.sectionTitle}>Opportunity discovery history</h2><span className={ui.eyebrow}>{opportunityRuns.length} recent runs</span></div>
+      {opportunityRuns.length ? <div className={ui.list}>{opportunityRuns.map((run) => <article className={ui.panel} key={run.id}><div className={ui.cardTopline}><div><p className={ui.eyebrow}>{run.countries.join(', ') || 'No countries selected'}</p><p className="mb-0 mt-1 text-xs text-muted">{run.startedAt}{run.completedAt ? ` · finished ${run.completedAt}` : ''}</p></div><span className={ui.status}>{run.state}</span></div><p className="mt-3 text-sm text-muted">{run.counts.searches} searches · {run.counts.results} results · {run.counts.pagesFetched} official pages fetched · {run.counts.interestMatches} interest matches · {run.counts.saved} saved · {run.counts.duplicates} duplicates · {run.counts.failures} failures</p><ul className="m-0 list-none space-y-1 p-0 text-xs text-muted">{run.sources.map((source) => <li key={`${source.country}-${source.source}`}>{source.country} · {source.source} · {source.hosts.join(', ') || 'no verified host'} · {source.counts.saved} saved, {source.counts.duplicates} duplicates{source.stopReasons.length ? ` · ${source.stopReasons.join(', ')}` : ''}</li>)}</ul></article>)}</div> : <p className={ui.panel}>No opportunity discovery runs have been recorded.</p>}
+    </section>
 
     <section className={`${ui.panel} ${ui.section}`}>
       <div className="mb-4"><p className={ui.eyebrow}>Browse records</p><h2 className={`${ui.sectionTitle} mb-0 mt-1`}>Find a program</h2></div>
@@ -39,8 +54,8 @@ export default async function ProgramsPage({ searchParams }: { searchParams: Pro
     <section className={ui.section}>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2"><h2 className={ui.sectionTitle}>Saved programs</h2><span className={ui.eyebrow}>{visiblePrograms.length} matching records</span></div>
       {visiblePrograms.length ? <div className={ui.list}>{visiblePrograms.map((program) => {
-        const result = latest.get(program.id);
         const kind = program.kind ?? 'msc_program';
+        const result = program.reviewStatus === 'approved' ? latest.get(program.id) : undefined;
         const fit = assessOpportunityFit(program, profile);
         return <article className={`${ui.panel} min-w-0`} key={program.id}>
           <div className={ui.cardTopline}><div className="min-w-0"><p className={ui.eyebrow}>{program.institution}</p><h3 className="mb-0 mt-1 break-words font-display text-lg font-bold">{program.name}</h3></div><span className={ui.status}>{program.reviewStatus ?? 'pending review'}</span></div>
@@ -50,9 +65,10 @@ export default async function ProgramsPage({ searchParams }: { searchParams: Pro
           {program.eligibility ? <p className="text-sm">Eligibility source says: {program.eligibility.summary} (<a className="text-green underline" href={safeOfficialSourceUrl(program.eligibility.evidence.sourceUrl) ?? undefined}>source</a>)</p> : <p className="text-sm text-muted">Eligibility requirements: unknown.</p>}
           {program.fundingDetails ? <p className="text-sm">Funding: {program.fundingDetails.summary} (<a className="text-green underline" href={safeOfficialSourceUrl(program.fundingDetails.evidence.sourceUrl) ?? undefined}>source</a>)</p> : null}
           {program.compensation ? <p className="text-sm">Compensation: {program.compensation.summary} (<a className="text-green underline" href={safeOfficialSourceUrl(program.compensation.evidence.sourceUrl) ?? undefined}>source</a>)</p> : null}
-          <p className="mb-0 mt-2 text-sm"><strong>Potential fit:</strong> {fit.outcome.replaceAll('_', ' ')}. {fit.reasons.join(' ')} Eligibility is assessed only from explicit evidence.</p>
+          {program.deadline ? <p className="text-sm">Deadline stated by source: {program.deadline.date.slice(0, 10)} (<a className="text-green underline" href={safeOfficialSourceUrl(program.deadline.evidence.sourceUrl) ?? undefined}>source</a>)</p> : null}
+          <p className="mb-0 mt-2 text-sm"><strong>Evidence fit:</strong> {fit.outcome.replaceAll('_', ' ')}. {fit.reasons.join(' ')} Owner review is required before acceptance or eligibility assessment.</p>
           {result ? <details className="mt-4 rounded-xl border border-line bg-paper px-4"><summary className="min-h-11 cursor-pointer py-2.5 text-sm font-semibold">Assessment reasons and source evidence</summary><div className="grid min-w-0 grid-cols-1 gap-3 pb-4 sm:grid-cols-2 xl:grid-cols-3">{facts.map((field) => <section className="min-w-0 rounded-xl border border-line bg-white p-3.5" key={field}><h4 className="mb-2 mt-0 break-words font-display text-sm font-bold capitalize">{field} <span className="font-mono text-xs font-medium text-muted">· {result[field].outcome}</span></h4><ul className="my-2 list-disc space-y-1 pl-5 text-sm text-muted">{result[field].reasons.map((reason, index) => <li className="break-words" key={index}>{reason}</li>)}</ul>{result[field].evidence.map((item, index) => { const href = safeOfficialSourceUrl(item.sourceUrl); return <div className="mt-3 border-t border-line pt-3 text-sm" key={index}>{href ? <a className="break-all font-semibold text-green underline underline-offset-4" href={href} target="_blank" rel="noopener noreferrer">{href}</a> : <span className="text-muted">Official source unavailable</span>}<p className="mb-1 mt-2 break-words text-muted">Checked {item.checkedAt.slice(0, 10)}</p><p className="mb-0 break-words">{previewSavedExcerpt(item.excerpt)}</p>{item.excerpt.length > 260 ? <details className="mt-2"><summary className="min-h-11 cursor-pointer py-2 text-xs font-semibold">Show full saved excerpt</summary><p className="break-words">{item.excerpt}</p></details> : null}</div>; })}</section>)}</div></details> : <p className="mb-0 mt-4 rounded-xl bg-paper p-3 text-sm text-muted">No assessment is saved for this program yet.</p>}
-          <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4"><form action={reviewOpportunityAction}><input type="hidden" name="programId" value={program.id}/><input type="hidden" name="decision" value="approved"/><button className={ui.secondaryButton} type="submit" disabled={!program.sourceEvidence || Boolean(program.sourceEvidence.uncertainty.trim())}>Approve reviewed opportunity</button></form><form action={reviewOpportunityAction}><input type="hidden" name="programId" value={program.id}/><input type="hidden" name="decision" value="rejected"/><button className={ui.secondaryButton} type="submit">Reject</button></form>{kind === 'msc_program' ? <form action={reassessProgramAction}><input type="hidden" name="programId" value={program.id}/><button className={ui.secondaryButton} type="submit">Reassess against current profile</button></form> : null}</div>
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-4">{program.reviewStatus !== 'approved' ? <form action={reviewOpportunityAction}><input type="hidden" name="programId" value={program.id}/><input type="hidden" name="decision" value="approved"/><button className={ui.secondaryButton} type="submit" disabled={!program.sourceEvidence || Boolean(program.sourceEvidence.uncertainty.trim())}>Review and approve</button></form> : null}{program.reviewStatus !== 'rejected' ? <form action={reviewOpportunityAction}><input type="hidden" name="programId" value={program.id}/><input type="hidden" name="decision" value="rejected"/><button className={ui.secondaryButton} type="submit">Reject</button></form> : null}{kind === 'msc_program' && program.reviewStatus === 'approved' ? <form action={reassessProgramAction}><input type="hidden" name="programId" value={program.id}/><button className={ui.secondaryButton} type="submit">Reassess against current profile</button></form> : null}</div>
         </article>;
       })}</div> : <p className={`${ui.panel} ${ui.muted}`}>{programs.length ? 'No saved programs match these filters.' : 'No program records are saved yet.'}</p>}
     </section>

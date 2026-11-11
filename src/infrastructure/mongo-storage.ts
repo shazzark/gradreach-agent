@@ -2,8 +2,10 @@ import { MongoClient } from 'mongodb';
 import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { CandidateEvidenceTriage, OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
-import type { ProgramAssessment, ProgramRecord } from '../domain/program-assessment.ts';
+import { canonicalizeOpportunityIdentity, type ProgramAssessment, type ProgramRecord } from '../domain/program-assessment.ts';
 import type { DiscoveryEvidenceCheck, DiscoveryRun, DiscoverySchedule } from '../application/automatic-discovery.ts';
+import type { OpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
+import { sanitizeOpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
 import { MAX_SAVED_LEADS_PER_REPROCESS_RUN, type SavedLeadReprocessResult, type SavedLeadReprocessRun } from '../domain/saved-lead-reprocessing.ts';
 import { getLocalDateKey } from '../domain/outreach-queue.ts';
 import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
@@ -54,7 +56,7 @@ interface StoredSchedulerControl extends Document {
 }
 
 interface StoredDiscoverySchedule extends Document { _id: 'automatic-discovery'; schedule: DiscoverySchedule; updatedAt: Date; }
-interface StoredDiscoveryRun extends Document { _id: string; run: DiscoveryRun; updatedAt: Date; }
+interface StoredDiscoveryRun extends Document { _id: string; run: DiscoveryRun | OpportunityDiscoveryRun; updatedAt: Date; }
 interface StoredDiscoveryCheck extends Document { _id: string; check: DiscoveryEvidenceCheck; updatedAt: Date; }
 interface StoredSavedLeadReprocessRun extends Document { _id: string; run: SavedLeadReprocessRun; updatedAt: Date; }
 interface StoredConfirmedProfessor extends Document {
@@ -148,7 +150,7 @@ export class AutomaticDiscoveryRunRepository {
   private readonly collection: Collection<StoredDiscoveryRun>;
   constructor(collection: Collection<StoredDiscoveryRun>) { this.collection = collection; }
   async list(limit: number): Promise<DiscoveryRun[]> {
-    return (await this.collection.find().sort({ 'run.startedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((item) => item.run);
+    return (await this.collection.find({ 'run.system': { $ne: 'opportunity' } }).sort({ 'run.startedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((item) => item.run as DiscoveryRun);
   }
   async claim(run: DiscoveryRun): Promise<boolean> {
     try { await this.collection.insertOne({ _id: run.id, run, updatedAt: new Date() }); return true; }
@@ -176,7 +178,8 @@ export class AutomaticDiscoveryRunRepository {
     if (runId.length > 512 || !outcome.country.trim() || outcome.country.length > 80 || outcome.runId.length > 512) return;
     const current = await this.collection.findOne({ _id: runId, 'run.state': 'running' }, { projection: { 'run.countryOutcomes': 1 } });
     if (!current) return;
-    const outcomes = current.run.countryOutcomes ?? [];
+    const professorRun = current.run as DiscoveryRun;
+    const outcomes = professorRun.countryOutcomes ?? [];
     const updated = [...outcomes.filter((item) => item.country !== outcome.country), outcome];
     await this.collection.updateOne({ _id: runId, 'run.state': 'running' }, { $set: { 'run.countryOutcomes': updated, updatedAt: new Date() } });
   }
@@ -192,6 +195,37 @@ export class AutomaticDiscoveryRunRepository {
       { $set: { 'run.state': 'failed', 'run.failureCode': 'worker_interrupted', 'run.completedAt': finishedAt, updatedAt: new Date() } },
     );
     return result.modifiedCount;
+  }
+}
+
+/** Persists opportunity runs in the existing discovery_job_runs collection with a system discriminator. */
+export class OpportunityDiscoveryRunRepository {
+  private readonly collection: Collection<StoredDiscoveryRun>;
+  constructor(collection: Collection<StoredDiscoveryRun>) { this.collection = collection; }
+  async list(limit = 20): Promise<OpportunityDiscoveryRun[]> {
+    return (await this.collection.find({ 'run.system': 'opportunity' }).sort({ 'run.startedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((item) => sanitizeOpportunityDiscoveryRun(item.run as OpportunityDiscoveryRun));
+  }
+  async claim(run: OpportunityDiscoveryRun): Promise<boolean> {
+    const safe = sanitizeOpportunityDiscoveryRun(run);
+    try { await this.collection.insertOne({ _id: safe.id, run: safe, updatedAt: new Date() }); return true; }
+    catch (error) { if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) return false; throw error; }
+  }
+  async recordProgress(run: OpportunityDiscoveryRun): Promise<void> {
+    const safe = sanitizeOpportunityDiscoveryRun(run);
+    await this.collection.updateOne({ _id: safe.id, 'run.system': 'opportunity', 'run.state': 'running' }, { $set: { 'run.counts': safe.counts, updatedAt: new Date() } });
+  }
+  async recordSource(runId: string, source: OpportunityDiscoveryRun['sources'][number]): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(runId)) return;
+    const current = await this.collection.findOne({ _id: runId, 'run.system': 'opportunity', 'run.state': 'running' }, { projection: { run: 1 } });
+    if (!current) return;
+    const run = sanitizeOpportunityDiscoveryRun(current.run as OpportunityDiscoveryRun);
+    const updated = sanitizeOpportunityDiscoveryRun({ ...run, sources: [...run.sources.filter((item) => item.country !== source.country || item.source !== source.source), source] });
+    await this.collection.updateOne({ _id: runId, 'run.system': 'opportunity', 'run.state': 'running' }, { $set: { 'run.sources': updated.sources, updatedAt: new Date() } });
+  }
+  async finish(run: OpportunityDiscoveryRun): Promise<boolean> {
+    const safe = sanitizeOpportunityDiscoveryRun(run);
+    const result = await this.collection.updateOne({ _id: safe.id, 'run.system': 'opportunity', 'run.state': 'running' }, { $set: { run: safe, updatedAt: new Date() } });
+    return result.modifiedCount === 1;
   }
 }
 
@@ -518,16 +552,48 @@ export class ProgramRepository {
     return documents.map((document) => document.program);
   }
 
-  async save(program: ProgramRecord): Promise<{ id: string; duplicate: boolean }> {
-    const sourceUrl = program.sourceEvidence?.sourceUrl;
-    if (sourceUrl) {
-      const canonical = (value: string) => { const url = new URL(value); url.search = ''; url.hash = ''; return url.toString().replace(/\/$/, ''); };
-      const documents = await this.collection.find({ _id: { $ne: program.id }, 'program.sourceEvidence.sourceUrl': { $exists: true } }).project({ _id: 1, 'program.sourceEvidence.sourceUrl': 1 }).toArray();
-      const duplicate = documents.find((document) => typeof document.program?.sourceEvidence?.sourceUrl === 'string' && canonical(document.program.sourceEvidence.sourceUrl) === canonical(sourceUrl));
-      if (duplicate) return { id: duplicate._id, duplicate: true };
+  async findDuplicate(program: ProgramRecord): Promise<{ id: string; reason: 'source' | 'identity' } | undefined> {
+    const documents = await this.collection.find({ _id: { $ne: program.id } }).project({ _id: 1, program: 1 }).toArray();
+    const sourceIdentity = program.sourceEvidence?.sourceUrl ? canonicalProgramSource(program.sourceEvidence.sourceUrl) : undefined;
+    const identity = canonicalizeOpportunityIdentity(program);
+    for (const document of documents) {
+      const candidate = document.program;
+      if (!candidate) continue;
+      if (sourceIdentity && candidate.sourceEvidence?.sourceUrl && canonicalProgramSource(candidate.sourceEvidence.sourceUrl) === sourceIdentity) {
+        return { id: document._id, reason: 'source' };
+      }
+      if (canonicalizeOpportunityIdentity(candidate) === identity) return { id: document._id, reason: 'identity' };
     }
+    return undefined;
+  }
+
+  async save(program: ProgramRecord): Promise<{ id: string; duplicate: boolean }> {
+    const duplicate = await this.findDuplicate(program);
+    if (duplicate) return { id: duplicate.id, duplicate: true };
     await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
     return { id: program.id, duplicate: false };
+  }
+
+  async saveDiscovered(program: ProgramRecord): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }> {
+    const existing = await this.collection.findOne({ _id: program.id }, { projection: { _id: 1, program: 1 } });
+    if (existing) return { id: existing._id, duplicate: true, reason: existing.program?.sourceEvidence?.sourceUrl && program.sourceEvidence?.sourceUrl && canonicalProgramSource(existing.program.sourceEvidence.sourceUrl) === canonicalProgramSource(program.sourceEvidence.sourceUrl) ? 'source' : 'identity' };
+    const duplicate = await this.findDuplicateWithoutIdExclusion(program);
+    if (duplicate) return { id: duplicate.id, duplicate: true, reason: duplicate.reason };
+    await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
+    return { id: program.id, duplicate: false };
+  }
+
+  private async findDuplicateWithoutIdExclusion(program: ProgramRecord): Promise<{ id: string; reason: 'source' | 'identity' } | undefined> {
+    const documents = await this.collection.find().project({ _id: 1, program: 1 }).toArray();
+    const sourceIdentity = program.sourceEvidence?.sourceUrl ? canonicalProgramSource(program.sourceEvidence.sourceUrl) : undefined;
+    const identity = canonicalizeOpportunityIdentity(program);
+    for (const document of documents) {
+      const candidate = document.program;
+      if (!candidate) continue;
+      if (sourceIdentity && candidate.sourceEvidence?.sourceUrl && canonicalProgramSource(candidate.sourceEvidence.sourceUrl) === sourceIdentity) return { id: document._id, reason: 'source' };
+      if (canonicalizeOpportunityIdentity(candidate) === identity) return { id: document._id, reason: 'identity' };
+    }
+    return undefined;
   }
 
   async setReviewStatus(programId: string, status: 'approved' | 'rejected', reviewedAt: string): Promise<boolean> {
@@ -543,6 +609,13 @@ export class ProgramRepository {
     const result = await this.collection.deleteOne({ _id: programId });
     return result.deletedCount === 1;
   }
+}
+
+function canonicalProgramSource(value: string): string {
+  const url = new URL(value);
+  url.hash = '';
+  url.search = '';
+  return url.toString().replace(/\/$/, '');
 }
 
 export class ProgramAssessmentRepository {
@@ -629,6 +702,7 @@ export interface GradReachRepositories {
   schedulerControl: SchedulerControlRepository;
   discoverySchedule: AutomaticDiscoveryScheduleRepository;
   discoveryRuns: AutomaticDiscoveryRunRepository;
+  opportunityDiscoveryRuns: OpportunityDiscoveryRunRepository;
   discoveryChecks: AutomaticDiscoveryEvidenceCheckRepository;
   savedLeadReprocessRuns: SavedLeadReprocessRunRepository;
   confirmedProfessors: ConfirmedProfessorRepository;
@@ -646,6 +720,7 @@ export function createRepositories(db: Db): GradReachRepositories {
     schedulerControl: new SchedulerControlRepository(db.collection<StoredSchedulerControl>('outreach_control')),
     discoverySchedule: new AutomaticDiscoveryScheduleRepository(db.collection<StoredDiscoverySchedule>('discovery_schedule')),
     discoveryRuns: new AutomaticDiscoveryRunRepository(db.collection<StoredDiscoveryRun>('discovery_job_runs')),
+    opportunityDiscoveryRuns: new OpportunityDiscoveryRunRepository(db.collection<StoredDiscoveryRun>('discovery_job_runs')),
     discoveryChecks: new AutomaticDiscoveryEvidenceCheckRepository(db.collection<StoredDiscoveryCheck>('discovery_evidence_checks')),
     savedLeadReprocessRuns: new SavedLeadReprocessRunRepository(db.collection<StoredSavedLeadReprocessRun>('saved_lead_reprocess_runs')),
     confirmedProfessors: new ConfirmedProfessorRepository(db.collection<StoredConfirmedProfessor>('confirmed_professors')),

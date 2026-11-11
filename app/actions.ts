@@ -17,6 +17,7 @@ import { persistPreparedProfessorEvidence, prepareSavedProfessorEvidence } from 
 import { readProfilePreferenceList } from '../src/application/profile-preferences.ts';
 import { publishJobProgress } from '../src/infrastructure/job-progress-bus.ts';
 import { appendPhase3ResultDiagnostic } from '../src/infrastructure/phase3-pilot-diagnostics.ts';
+import { runOpportunityDiscovery } from '../src/application/opportunity-discovery.ts';
 
 function text(form: FormData, name: string): string {
   const value = form.get(name);
@@ -33,9 +34,9 @@ function safeId(value: string): string {
   return value;
 }
 
-function actionRedirect(path: string, state: 'saved' | 'duplicate' | 'unavailable' = 'saved'): never {
+function actionRedirect(path: string, state: 'saved' | 'duplicate' | 'discovered' | 'unavailable' = 'saved'): never {
   revalidatePath(path);
-  if (state === 'saved') publishJobProgress({
+  if (state === 'saved' || state === 'discovered') publishJobProgress({
     jobId: `ws_${randomUUID().replaceAll('-', '')}`,
     kind: 'workspace', state: 'completed', stage: 'completed', updatedAt: new Date().toISOString(),
   });
@@ -274,6 +275,17 @@ export async function reviewOpportunityAction(form: FormData): Promise<never> {
   try { await withOwnerData((repositories) => reviewProgramOpportunity({ repositories, programId: id, decision })); }
   catch (error) { return handleActionFailure(error, '/programs'); }
   return actionRedirect('/programs');
+}
+
+export async function discoverOpportunitiesAction(form: FormData): Promise<never> {
+  const requestId = text(form, 'requestId');
+  try {
+    await withOwnerData(async (repositories) => {
+      const profile = await repositories.profiles.get('primary');
+      await runOpportunityDiscovery({ repositories, profile, provider: new BraveSearchProvider(), requestId });
+    });
+  } catch (error) { return handleActionFailure(error, '/programs'); }
+  return actionRedirect('/programs', 'discovered');
 }
 
 export async function reassessProgramAction(form: FormData): Promise<never> {

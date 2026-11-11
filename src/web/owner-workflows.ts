@@ -57,6 +57,7 @@ export async function assessSavedProgram(input: {
 }): Promise<void> {
   const program = await input.repositories.programs.get(input.programId);
   if (!program) throw new Error('Program not found');
+  if (program.reviewStatus !== 'approved') throw new Error('Opportunity must be approved by the owner before assessment');
   const assessment = assessProgram({ program, profile: input.profile, ...(input.assessedAt ? { assessedAt: input.assessedAt } : {}) });
   await input.repositories.assessments.save(assessment);
 }
@@ -70,10 +71,6 @@ export async function importAndAssessProgram(input: {
   const program = parseProgramRecord(input.program);
   const saved = await input.repositories.programs.save(program);
   if (saved.duplicate) return saved;
-  if (program.kind === 'msc_program') {
-    const assessment = assessProgram({ program, profile: input.profile, ...(input.assessedAt ? { assessedAt: input.assessedAt } : {}) });
-    await input.repositories.assessments.save(assessment);
-  }
   return saved;
 }
 
@@ -89,8 +86,21 @@ export async function reviewProgramOpportunity(input: {
     const evidence = [program.sourceEvidence, program.eligibility?.evidence, program.fundingDetails?.evidence, program.compensation?.evidence,
       program.admissions?.evidence, program.english?.evidence, program.tuition?.evidence, program.deadline?.evidence,
       ...(program.fundingRoutes ?? []).map((route) => route.evidence)].filter((item) => item !== undefined);
-    if (!program.sourceEvidence || evidence.some((item) => item.verification !== 'reviewed' || item.uncertainty.trim())) {
+    if (!program.sourceEvidence || evidence.some((item) => item.uncertainty.trim())) {
       throw new Error('Opportunity cannot be approved while official evidence is missing or uncertain');
+    }
+    const reviewed = structuredClone(program);
+    const allEvidence = [reviewed.sourceEvidence, reviewed.eligibility?.evidence, reviewed.fundingDetails?.evidence, reviewed.compensation?.evidence,
+      reviewed.admissions?.evidence, reviewed.english?.evidence, reviewed.tuition?.evidence, reviewed.deadline?.evidence,
+      ...(reviewed.fundingRoutes ?? []).map((route) => route.evidence)].filter((item) => item !== undefined);
+    for (const item of allEvidence) item.verification = 'reviewed';
+    await input.repositories.programs.save(reviewed);
+    if ((reviewed.kind ?? 'msc_program') === 'msc_program') {
+      const profile = await input.repositories.profiles.get('primary');
+      if (profile) {
+        const assessment = assessProgram({ program: reviewed, profile, ...(input.reviewedAt ? { assessedAt: input.reviewedAt } : {}) });
+        await input.repositories.assessments.save(assessment);
+      }
     }
   }
   await input.repositories.programs.setReviewStatus(input.programId, input.decision, input.reviewedAt ?? new Date().toISOString());
