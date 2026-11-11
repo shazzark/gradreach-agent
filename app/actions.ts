@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { randomUUID } from 'node:crypto';
 import { acceptDiscoveredProfessorLead, rejectDiscoveredProfessorLead } from '../src/application/discovery-lead-review.ts';
 import { triageCandidateEvidence } from '../src/application/evidence-triage.ts';
-import { assessSavedProgram, importAndAssessProgram, approveReviewedDraft, addPlannedAttempts, recordOutreachOutcome, reviewProfessorEvidence, saveApplicantProfile, saveReviewedDraft, toggleOutreachPause, saveAutomaticDiscoverySettings, toggleAutomaticDiscoveryPause } from '../src/web/owner-workflows.ts';
+import { assessSavedProgram, importAndAssessProgram, approveReviewedDraft, addPlannedAttempts, recordOutreachOutcome, reviewProfessorEvidence, reviewProgramOpportunity, saveApplicantProfile, saveReviewedDraft, toggleOutreachPause, saveAutomaticDiscoverySettings, toggleAutomaticDiscoveryPause } from '../src/web/owner-workflows.ts';
 import { DEFAULT_DISCOVERY_SCHEDULE, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
 import { withOwnerData } from '../src/web/owner-data.ts';
 import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
@@ -33,8 +33,12 @@ function safeId(value: string): string {
   return value;
 }
 
-function actionRedirect(path: string, state: 'saved' | 'unavailable' = 'saved'): never {
+function actionRedirect(path: string, state: 'saved' | 'duplicate' | 'unavailable' = 'saved'): never {
   revalidatePath(path);
+  if (state === 'saved') publishJobProgress({
+    jobId: `ws_${randomUUID().replaceAll('-', '')}`,
+    kind: 'workspace', state: 'completed', stage: 'completed', updatedAt: new Date().toISOString(),
+  });
   redirect(`${path}?state=${state}`);
 }
 
@@ -249,6 +253,7 @@ export async function saveProfileAction(form: FormData): Promise<never> {
 }
 
 export async function importProgramAction(form: FormData): Promise<never> {
+  let duplicate = false;
   try {
     const source = text(form, 'programJson');
     if (source.length > 100_000) throw new Error('Program record is too large');
@@ -256,9 +261,18 @@ export async function importProgramAction(form: FormData): Promise<never> {
     await withOwnerData(async (repositories) => {
       const profile = await repositories.profiles.get('primary');
       if (!profile) throw new Error('Profile is unavailable');
-      await importAndAssessProgram({ repositories, profile, program });
+      duplicate = (await importAndAssessProgram({ repositories, profile, program })).duplicate;
     });
   } catch (error) { return handleActionFailure(error, '/programs'); }
+  return actionRedirect('/programs', duplicate ? 'duplicate' : 'saved');
+}
+
+export async function reviewOpportunityAction(form: FormData): Promise<never> {
+  const id = safeId(text(form, 'programId'));
+  const decision = text(form, 'decision');
+  if (decision !== 'approved' && decision !== 'rejected') return actionRedirect('/programs', 'unavailable');
+  try { await withOwnerData((repositories) => reviewProgramOpportunity({ repositories, programId: id, decision })); }
+  catch (error) { return handleActionFailure(error, '/programs'); }
   return actionRedirect('/programs');
 }
 

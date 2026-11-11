@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { encode } from 'next-auth/jwt';
 import { Server } from 'socket.io';
 import { io as socketClient } from 'socket.io-client';
-import { parseJobProgressEvent } from '../src/domain/job-progress.ts';
+import { createJobProgressHandler, parseJobProgressEvent } from '../src/domain/job-progress.ts';
 import { publishJobProgress, subscribeToJobProgress } from '../src/infrastructure/job-progress-bus.ts';
 import { attachJobProgressSocket } from '../src/infrastructure/socket-progress-server.ts';
 import { isAuthorizedSocketHandshake, isSocketOwnerToken, isTrustedSocketOrigin } from '../src/web/socket-progress-auth.ts';
@@ -17,10 +17,28 @@ const event = {
 
 test('progress events accept only bounded status fields, never record or content payloads', () => {
   assert.deepEqual(parseJobProgressEvent(event), event);
+  assert.equal(parseJobProgressEvent({ jobId: 'ws_123', kind: 'workspace', state: 'completed', stage: 'completed', updatedAt: event.updatedAt }).kind, 'workspace');
   assert.throws(() => parseJobProgressEvent({ ...event, professorName: 'private data' }), /Unsupported job progress field/);
   assert.throws(() => parseJobProgressEvent({ ...event, result: { email: 'private data' } }), /Unsupported job progress field/);
   assert.throws(() => parseJobProgressEvent({ ...event, completed: 4 }), /exceeds its total/);
   assert.throws(() => parseJobProgressEvent({ ...event, jobId: 'bad id' }), /Invalid job progress ID/);
+});
+
+test('valid newest events refresh server-fetched data once; duplicate, stale, and private events are ignored', () => {
+  let durableValue = 'before';
+  let renderedValue = durableValue;
+  let refreshes = 0;
+  const handle = createJobProgressHandler(() => {
+    refreshes++;
+    renderedValue = durableValue;
+  });
+  durableValue = 'saved MongoDB record';
+  handle(event);
+  handle(event);
+  handle({ ...event, stage: 'starting', updatedAt: '2026-11-07T11:59:59.000Z' });
+  handle({ ...event, searchQuery: 'private query', updatedAt: '2026-11-07T12:00:01.000Z' });
+  assert.equal(renderedValue, 'saved MongoDB record');
+  assert.equal(refreshes, 1);
 });
 
 test('the progress bus publishes validated transient events and supports unsubscribe', () => {
@@ -109,6 +127,37 @@ test('authorized owner receives only the transient progress event over Socket.IO
     });
     publishJobProgress(event);
     assert.deepEqual(await received, event);
+  } finally {
+    client.disconnect();
+    unsubscribe();
+    await new Promise<void>((resolve) => io.close(() => resolve()));
+  }
+});
+
+test('unauthorized socket clients cannot connect or receive progress events', async () => {
+  const httpServer = createServer();
+  const io = new Server(httpServer, { path: '/api/socket.io' });
+  const unsubscribe = attachJobProgressSocket({
+    io, ownerEmail: 'owner@example.edu', secret: 'test-only-secret-for-socket-auth', authUrl: 'https://gradreach.example', isProduction: true,
+  });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = httpServer.address() as AddressInfo;
+  const client = socketClient(`http://127.0.0.1:${port}`, {
+    path: '/api/socket.io', transports: ['websocket'], reconnection: false,
+    extraHeaders: { Origin: 'https://gradreach.example', Cookie: 'authjs.session-token=invalid' },
+  });
+  try {
+    await new Promise<void>((resolve) => {
+      client.once('connect_error', () => resolve());
+      client.once('connect', () => resolve());
+      setTimeout(resolve, 3000).unref();
+    });
+    assert.equal(client.connected, false);
+    publishJobProgress(event);
+    assert.equal(client.connected, false);
   } finally {
     client.disconnect();
     unsubscribe();

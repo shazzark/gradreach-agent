@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { loadConfirmedProfessorPreviewData } from '../../../src/web/confirmed-professors-data.ts';
+import { withOwnerData } from '../../../src/web/owner-data.ts';
 import { ui } from '../../../src/web/ui-classes.ts';
 import type { ConfirmedResearchStatus } from '../../../src/application/confirmed-professors.ts';
 
@@ -12,7 +13,10 @@ function ResearchStatus({ status }: { status: ConfirmedResearchStatus }) {
 }
 
 export default async function ConfirmedProfessorsPage() {
-  const data = await loadConfirmedProfessorPreviewData();
+  const [data, saved] = await Promise.all([
+    loadConfirmedProfessorPreviewData(),
+    withOwnerData((repositories) => repositories.confirmedProfessors.list()),
+  ]);
   return <main className="min-w-0">
     <div className={ui.pageHead}>
       <div><p className={ui.eyebrow}>Private discovery library</p><h1 className={ui.pageTitle}>Confirmed professors</h1><p className={ui.pageDescription}>People whose names and academic roles were confirmed from official profile pages. Confirmation is separate from research-interest fit and lead qualification.</p></div>
@@ -20,8 +24,19 @@ export default async function ConfirmedProfessorsPage() {
     </div>
 
     <section className={`${ui.panel} ${ui.section}`} aria-label="Preview source and review status">
-      <p className={ui.note}>This section currently uses private local discovery previews. It does not create professor records or leads in MongoDB. Every entry remains unapproved, unqueued, and unsent.</p>
+      <p className={ui.note}>MongoDB records below are the durable confirmed-professor library. Local discovery previews are shown separately and do not create MongoDB records or leads.</p>
       {data.status === 'available' ? <p className="mb-0 mt-3 text-xs leading-5 text-muted">Source: <span className="font-mono">{data.source}</span> · {data.countriesCovered} countries covered · {data.skippedCountries.length} skipped for missing verified hosts.</p> : null}
+    </section>
+
+    <section className={`${ui.section}`} aria-label="Saved confirmed professors">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-2"><h2 className={ui.sectionTitle}>Saved in MongoDB</h2><span className={ui.eyebrow}>{saved.length} confirmed {saved.length === 1 ? 'professor' : 'professors'}</span></div>
+      {saved.length ? <div className={ui.grid}>{saved.map((professor) => <article className={ui.panel} key={professor.stableId}>
+        <div className={ui.cardTopline}><div><p className={ui.eyebrow}>{professor.country} · {professor.institution}</p><h3 className="mb-0 mt-1 font-display text-lg font-bold">{professor.name}</h3></div><span className={`${ui.tag} ${ui.professorTag}`}>Confirmed professor</span></div>
+        <p className="mt-3 text-sm text-muted">Research status: {professor.researchStatus.replaceAll('_', ' ')}. Review: {professor.ownerDecision}.</p>
+        <a className="break-all text-sm font-semibold text-green underline" href={professor.officialProfileUrl} target="_blank" rel="noreferrer">Open official profile</a>
+        {professor.researchEvidence.length ? <ul className="mt-3 list-disc pl-5">{professor.researchEvidence.map((evidence, index) => <li key={`${evidence.sourceUrl}-${index}`}><a className="break-all text-sm text-green underline" href={evidence.sourceUrl} target="_blank" rel="noreferrer">Official research evidence</a><p className="text-sm text-muted">{evidence.quote}</p></li>)}</ul> : null}
+        <p className="mb-0 mt-2 text-xs text-muted">Not approved for outreach, queued, or sent.</p>
+      </article>)}</div> : <p className={ui.panel}>No confirmed professor records are saved in MongoDB yet.</p>}
     </section>
 
     {data.status === 'error' ? <section className={ui.panel} role="alert"><h2 className={ui.sectionTitle}>Preview reports could not be read</h2><p className="mb-0 text-sm text-muted">GradReach could not load the local discovery previews. No records were changed; try again later.</p></section> : null}

@@ -74,6 +74,13 @@ interface StoredConfirmedProfessor extends Document {
 export class ConfirmedProfessorRepository {
   private readonly collection: Collection<StoredConfirmedProfessor>;
   constructor(collection: Collection<StoredConfirmedProfessor>) { this.collection = collection; }
+  async list(): Promise<Array<Omit<ConfirmedProfessor, 'localOwnerDecision' | 'approved' | 'queued' | 'sent'> & { ownerDecision: 'pending' | 'accepted' | 'rejected' }>> {
+    const documents = await this.collection.find().sort({ 'professor.country': 1, 'professor.institution': 1, 'professor.name': 1 }).toArray();
+    return documents.map(({ professor, ownerDecision }) => ({
+      ...professor,
+      ownerDecision,
+    }));
+  }
   async upsert(professor: ConfirmedProfessor & { researchOutcome?: StoredConfirmedProfessor['researchOutcome'] }): Promise<'inserted' | 'updated'> {
     const profile = new URL(professor.officialProfileUrl);
     profile.search = ''; profile.hash = '';
@@ -511,8 +518,25 @@ export class ProgramRepository {
     return documents.map((document) => document.program);
   }
 
-  async save(program: ProgramRecord): Promise<void> {
+  async save(program: ProgramRecord): Promise<{ id: string; duplicate: boolean }> {
+    const sourceUrl = program.sourceEvidence?.sourceUrl;
+    if (sourceUrl) {
+      const canonical = (value: string) => { const url = new URL(value); url.search = ''; url.hash = ''; return url.toString().replace(/\/$/, ''); };
+      const documents = await this.collection.find({ _id: { $ne: program.id }, 'program.sourceEvidence.sourceUrl': { $exists: true } }).project({ _id: 1, 'program.sourceEvidence.sourceUrl': 1 }).toArray();
+      const duplicate = documents.find((document) => typeof document.program?.sourceEvidence?.sourceUrl === 'string' && canonical(document.program.sourceEvidence.sourceUrl) === canonical(sourceUrl));
+      if (duplicate) return { id: duplicate._id, duplicate: true };
+    }
     await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
+    return { id: program.id, duplicate: false };
+  }
+
+  async setReviewStatus(programId: string, status: 'approved' | 'rejected', reviewedAt: string): Promise<boolean> {
+    const reviewed = new Date(reviewedAt);
+    if (Number.isNaN(reviewed.getTime())) throw new Error('reviewedAt must be a valid date');
+    const result = await this.collection.updateOne({ _id: programId }, {
+      $set: { 'program.reviewStatus': status, 'program.reviewedAt': reviewed.toISOString(), updatedAt: reviewed },
+    });
+    return result.modifiedCount === 1;
   }
 
   async delete(programId: string): Promise<boolean> {

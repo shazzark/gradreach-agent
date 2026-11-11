@@ -66,11 +66,34 @@ export async function importAndAssessProgram(input: {
   profile: ApplicantProfile;
   program: unknown;
   assessedAt?: string;
-}): Promise<void> {
+}): Promise<{ id: string; duplicate: boolean }> {
   const program = parseProgramRecord(input.program);
-  const assessment = assessProgram({ program, profile: input.profile, ...(input.assessedAt ? { assessedAt: input.assessedAt } : {}) });
-  await input.repositories.programs.save(program);
-  await input.repositories.assessments.save(assessment);
+  const saved = await input.repositories.programs.save(program);
+  if (saved.duplicate) return saved;
+  if (program.kind === 'msc_program') {
+    const assessment = assessProgram({ program, profile: input.profile, ...(input.assessedAt ? { assessedAt: input.assessedAt } : {}) });
+    await input.repositories.assessments.save(assessment);
+  }
+  return saved;
+}
+
+export async function reviewProgramOpportunity(input: {
+  repositories: GradReachRepositories;
+  programId: string;
+  decision: 'approved' | 'rejected';
+  reviewedAt?: string;
+}): Promise<void> {
+  const program = await input.repositories.programs.get(input.programId);
+  if (!program) throw new Error('Opportunity not found');
+  if (input.decision === 'approved') {
+    const evidence = [program.sourceEvidence, program.eligibility?.evidence, program.fundingDetails?.evidence, program.compensation?.evidence,
+      program.admissions?.evidence, program.english?.evidence, program.tuition?.evidence, program.deadline?.evidence,
+      ...(program.fundingRoutes ?? []).map((route) => route.evidence)].filter((item) => item !== undefined);
+    if (!program.sourceEvidence || evidence.some((item) => item.verification !== 'reviewed' || item.uncertainty.trim())) {
+      throw new Error('Opportunity cannot be approved while official evidence is missing or uncertain');
+    }
+  }
+  await input.repositories.programs.setReviewStatus(input.programId, input.decision, input.reviewedAt ?? new Date().toISOString());
 }
 
 export async function saveProfileSettings(input: {

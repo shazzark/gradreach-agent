@@ -65,7 +65,7 @@ test('workspace loader uses saved repository values for profile, leads, programs
 
 test('private route source files load through the authenticated owner workspace and provide empty states', async () => {
   const routes = [
-    ['workspace/page.tsx', 'getOwnerWorkspace'], ['leads/page.tsx', 'getOwnerWorkspace'], ['confirmed-professors/page.tsx', 'loadConfirmedProfessorPreviewData'],
+    ['workspace/page.tsx', 'getOwnerWorkspace'], ['leads/page.tsx', 'getOwnerWorkspace'], ['confirmed-professors/page.tsx', 'withOwnerData'],
     ['programs/page.tsx', 'getOwnerWorkspace'], ['drafts/page.tsx', 'getOwnerWorkspace'],
     ['outreach/page.tsx', 'getOwnerWorkspace'], ['profile/page.tsx', 'withOwnerData'], ['discovery/page.tsx', 'getAutomaticDiscoverySettings'],
   ] as const;
@@ -102,6 +102,8 @@ test('private route source files load through the authenticated owner workspace 
   const confirmedLoader = await readFile(new URL('../src/web/confirmed-professors-data.ts', import.meta.url), 'utf8');
   assert.match(ownerLayout, /await requireOwner\(\)/);
   assert.match(confirmedPage, /loadConfirmedProfessorPreviewData/);
+  assert.match(confirmedPage, /repositories\.confirmedProfessors\.list\(\)/);
+  assert.match(confirmedPage, /Saved in MongoDB/);
   assert.match(confirmedLoader, /import 'server-only'/);
   assert.doesNotMatch(confirmedLoader, /connectMongoStorage|\.repositories\./);
   assert.match(confirmedPage, /Local previews are not available yet/);

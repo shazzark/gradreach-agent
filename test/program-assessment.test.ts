@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { assessProgram, parseProgramRecord, type OfficialEvidence, type ProgramRecord } from '../src/domain/program-assessment.ts';
+import { assessOpportunityFit, assessProgram, parseProgramRecord, type OfficialEvidence, type ProgramRecord } from '../src/domain/program-assessment.ts';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
+import { ProgramRepository } from '../src/infrastructure/mongo-storage.ts';
 
 const profile = parseApplicantProfile(JSON.parse(await readFile(new URL('../private.profile.example.json', import.meta.url), 'utf8')));
 profile.applicant.degree.classification = 'Second Class Lower (2:2)';
@@ -146,4 +147,43 @@ test('program JSON import requires reviewed HTTPS evidence for each entered fact
     id: 'unsafe-program', institution: 'Example University', name: 'MSc Example', country: 'Exampleland', intake: 'Fall 2027',
     tuition: { amount: 10000, currency: 'GBP', period: 'year', evidence: { ...evidence, sourceUrl: 'http://university.example.edu/fees' } },
   }), /must be an HTTPS URL/);
+});
+
+test('source-backed scholarship and company opportunities stay distinct, pending, and unknown facts remain unknown', () => {
+  const scholarship = parseProgramRecord({
+    id: 'scholarship-1', kind: 'scholarship', institution: 'Example Foundation', name: 'Systems Scholarship', country: 'Exampleland', intake: '2027',
+    field: 'computer science', sourceEvidence: evidence, eligibility: { summary: 'Open to international MSc applicants.', evidence },
+  });
+  const company = parseProgramRecord({
+    id: 'company-1', kind: 'company_graduate_program', institution: 'Example Tech', name: 'Graduate Engineer Programme', country: 'Exampleland', intake: '',
+    field: 'computer science', sourceEvidence: evidence, compensation: { summary: 'Salary range published in the official listing.', evidence },
+  });
+  assert.equal(scholarship.kind, 'scholarship');
+  assert.equal(company.kind, 'company_graduate_program');
+  assert.equal(scholarship.reviewStatus, 'pending');
+  assert.equal(company.reviewStatus, 'pending');
+  assert.equal(company.lastCheckedAt, evidence.checkedAt);
+  assert.equal(company.eligibility, undefined);
+  assert.equal(company.fundingDetails, undefined);
+  const preferences = structuredClone(profile);
+  preferences.applicant.target.countries = ['Exampleland'];
+  preferences.applicant.target.fields = ['computer science'];
+  assert.equal(assessOpportunityFit(company, preferences).outcome, 'potential_fit');
+  assert.throws(() => parseProgramRecord({ ...company, id: 'missing-source', sourceEvidence: undefined }), /requires reviewed official sourceEvidence/);
+});
+
+test('opportunity repository deduplicates canonical official sources before writing', async () => {
+  let replaced = false;
+  const repository = new ProgramRepository({
+    find() {
+      return { project() { return { async toArray() { return [{ _id: 'existing', program: { sourceEvidence: { sourceUrl: 'https://company.example/jobs/graduate' } } }]; } }; } };
+    },
+    async replaceOne() { replaced = true; },
+  } as never);
+  const duplicate = await repository.save(parseProgramRecord({
+    id: 'new-id', kind: 'company_graduate_program', institution: 'Example Tech', name: 'Graduate role', country: 'Exampleland', intake: '',
+    sourceEvidence: { ...evidence, sourceUrl: 'https://company.example/jobs/graduate?ref=campaign#role' },
+  }));
+  assert.deepEqual(duplicate, { id: 'existing', duplicate: true });
+  assert.equal(replaced, false);
 });

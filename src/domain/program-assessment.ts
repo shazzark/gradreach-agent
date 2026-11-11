@@ -1,6 +1,8 @@
 import type { ApplicantProfile } from './applicant-profile.ts';
 
 export type AssessmentOutcome = 'eligible' | 'unclear' | 'ineligible';
+export type OpportunityKind = 'msc_program' | 'scholarship' | 'company_graduate_program';
+export type OpportunityReviewStatus = 'pending' | 'approved' | 'rejected';
 
 export interface OfficialEvidence {
   sourceUrl: string;
@@ -12,10 +14,20 @@ export interface OfficialEvidence {
 
 export interface ProgramRecord {
   id: string;
+  kind?: OpportunityKind;
   institution: string;
   name: string;
   country: string;
   intake: string;
+  field?: string;
+  degree?: string;
+  sourceEvidence?: OfficialEvidence;
+  lastCheckedAt?: string;
+  reviewStatus?: OpportunityReviewStatus;
+  reviewedAt?: string;
+  fundingDetails?: { summary: string; evidence: OfficialEvidence };
+  compensation?: { summary: string; evidence: OfficialEvidence };
+  eligibility?: { summary: string; evidence: OfficialEvidence };
   admissions?: {
     minimumClassification?: string;
     minimumGpa?: { value: number; scale: number };
@@ -56,6 +68,27 @@ export interface ProgramAssessment {
   intake: AssessmentFinding;
   deadline: AssessmentFinding;
   overall: AssessmentOutcome;
+}
+
+export type OpportunityFit = { outcome: 'potential_fit' | 'unclear' | 'not_a_fit'; reasons: string[] };
+
+/** Describes preference overlap separately from admission or hiring eligibility. */
+export function assessOpportunityFit(program: ProgramRecord, profile: ApplicantProfile): OpportunityFit {
+  const reasons: string[] = [];
+  const fields = profile.applicant.target.fields.map((value) => value.trim().toLowerCase()).filter(Boolean);
+  const country = profile.applicant.target.countries.some((value) => value.trim().toLowerCase() === program.country.trim().toLowerCase());
+  const fieldKnown = Boolean(program.field?.trim());
+  const fieldMatches = fieldKnown && fields.some((value) => program.field!.toLowerCase().includes(value) || value.includes(program.field!.toLowerCase()));
+  if (country) reasons.push('Country matches a saved preference.');
+  else if (!profile.applicant.target.countries.length) reasons.push('Applicant country preferences are not configured.');
+  else reasons.push('Country does not match a saved preference.');
+  if (fieldMatches) reasons.push('Field matches a saved preference.');
+  else if (!fieldKnown || !fields.length) reasons.push('Field overlap is unknown because the record or saved preferences are incomplete.');
+  else reasons.push('Field does not match a saved preference.');
+  if (program.kind === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc')) reasons.push('Degree level is not stated.');
+  const mismatch = (profile.applicant.target.countries.length > 0 && !country) || (fieldKnown && fields.length > 0 && !fieldMatches);
+  const incomplete = !fieldKnown || fields.length === 0 || !profile.applicant.target.countries.length || (program.kind === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc'));
+  return { outcome: mismatch ? 'not_a_fit' : incomplete ? 'unclear' : 'potential_fit', reasons };
 }
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -107,6 +140,27 @@ export function parseProgramRecord(value: unknown): ProgramRecord {
     country: nonEmptyText(input.country, 'program.country'),
     intake: textValue(input.intake, 'program.intake'),
   };
+  const kind = input.kind ?? 'msc_program';
+  if (!['msc_program', 'scholarship', 'company_graduate_program'].includes(String(kind))) throw new Error('program.kind is invalid');
+  result.kind = kind as OpportunityKind;
+  if (input.field !== undefined) result.field = textValue(input.field, 'program.field');
+  if (input.degree !== undefined) result.degree = textValue(input.degree, 'program.degree');
+  if (input.sourceEvidence !== undefined) result.sourceEvidence = parseEvidence(input.sourceEvidence, 'program.sourceEvidence');
+  if (input.lastCheckedAt !== undefined) {
+    const checked = textValue(input.lastCheckedAt, 'program.lastCheckedAt');
+    if (Number.isNaN(Date.parse(checked))) throw new Error('program.lastCheckedAt must be a valid date');
+    result.lastCheckedAt = checked;
+  } else if (result.sourceEvidence) result.lastCheckedAt = result.sourceEvidence.checkedAt;
+  result.reviewStatus = 'pending';
+  for (const field of ['fundingDetails', 'compensation'] as const) if (input[field] !== undefined) {
+    const detail = objectValue(input[field], `program.${field}`);
+    result[field] = { summary: nonEmptyText(detail.summary, `program.${field}.summary`), evidence: parseEvidence(detail.evidence, `program.${field}.evidence`) };
+  }
+  if (input.eligibility !== undefined) {
+    const eligibility = objectValue(input.eligibility, 'program.eligibility');
+    result.eligibility = { summary: nonEmptyText(eligibility.summary, 'program.eligibility.summary'), evidence: parseEvidence(eligibility.evidence, 'program.eligibility.evidence') };
+  }
+  if ((input.kind !== undefined || result.kind !== 'msc_program') && !result.sourceEvidence) throw new Error('opportunity requires reviewed official sourceEvidence');
   if (input.admissions !== undefined) {
     const item = objectValue(input.admissions, 'program.admissions');
     const minimumGpa = item.minimumGpa === undefined ? undefined : objectValue(item.minimumGpa, 'program.admissions.minimumGpa');

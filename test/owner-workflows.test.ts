@@ -5,7 +5,7 @@ import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../src/domain/outreach-queue.ts';
 import type { ProgramRecord } from '../src/domain/program-assessment.ts';
 import type { GradReachRepositories } from '../src/infrastructure/mongo-storage.ts';
-import { addPlannedAttempts, approveReviewedDraft, assessSavedProgram, importAndAssessProgram, recordOutreachOutcome, reviewProfessorEvidence, saveApplicantProfile, saveProfileSettings, saveReviewedDraft, toggleOutreachPause } from '../src/web/owner-workflows.ts';
+import { addPlannedAttempts, approveReviewedDraft, assessSavedProgram, importAndAssessProgram, recordOutreachOutcome, reviewProfessorEvidence, reviewProgramOpportunity, saveApplicantProfile, saveProfileSettings, saveReviewedDraft, toggleOutreachPause } from '../src/web/owner-workflows.ts';
 
 const profile = parseApplicantProfile(JSON.parse(await readFile(new URL('../private.profile.example.json', import.meta.url), 'utf8')));
 profile.applicant.fullName = 'Synthetic Applicant';
@@ -48,7 +48,7 @@ function repositories(input: {
     } as never,
     programs: {
       async get(id: string) { return input.program?.id === id ? input.program : undefined; },
-      async save(value: ProgramRecord) { input.savedProgram = value; },
+      async save(value: ProgramRecord) { input.savedProgram = value; return { id: value.id, duplicate: false }; },
       async list() { return input.program ? [input.program] : []; },
     } as never,
     assessments: { async save(value: unknown) { input.savedAssessment = value; } } as never,
@@ -172,6 +172,40 @@ test('program workflow stores only records accepted by the existing evidence val
     id: 'bad-program', institution: 'Example', name: 'MSc', country: 'Exampleland', intake: '',
     tuition: { amount: 10, currency: 'USD', period: 'year', evidence: { sourceUrl: 'https://example.edu', checkedAt: '2026-10-31T12:00:00Z', excerpt: 'Tuition is 10 USD yearly.', uncertainty: '', verification: 'unverified' } },
   } }), /verification must be reviewed/);
+});
+
+test('opportunity review requires certain official evidence and records owner decisions', async () => {
+  let status = '';
+  const source = { sourceUrl: 'https://company.example/jobs/graduate', checkedAt: '2026-11-01T00:00:00Z', excerpt: 'Graduate role details.', uncertainty: '', verification: 'reviewed' as const };
+  const program = { id: 'company-1', kind: 'company_graduate_program' as const, institution: 'Example Tech', name: 'Graduate role', country: 'Exampleland', intake: '', sourceEvidence: source, lastCheckedAt: source.checkedAt, reviewStatus: 'pending' as const };
+  const repos = {
+    programs: {
+      async get() { return program; },
+      async setReviewStatus(_id: string, value: string) { status = value; return true; },
+    },
+  } as unknown as GradReachRepositories;
+  await reviewProgramOpportunity({ repositories: repos, programId: 'company-1', decision: 'approved', reviewedAt: '2026-11-02T00:00:00Z' });
+  assert.equal(status, 'approved');
+  status = '';
+  await assert.rejects(reviewProgramOpportunity({
+    repositories: { programs: { async get() { return { ...program, sourceEvidence: { ...source, uncertainty: 'Location is not confirmed.' } }; }, async setReviewStatus() { status = 'approved'; return true; } } } as unknown as GradReachRepositories,
+    programId: 'company-1', decision: 'approved',
+  }), /evidence is missing or uncertain/);
+  assert.equal(status, '');
+});
+
+test('duplicate opportunity imports do not create a second assessment', async () => {
+  let assessments = 0;
+  const sourceEvidence = { sourceUrl: 'https://scholarship.example/award', checkedAt: '2026-11-01T00:00:00Z', excerpt: 'Official award page.', uncertainty: '', verification: 'reviewed' as const };
+  const repositories = {
+    programs: { async save() { return { id: 'existing-award', duplicate: true }; } },
+    assessments: { async save() { assessments++; } },
+  } as unknown as GradReachRepositories;
+  const result = await importAndAssessProgram({ repositories, profile, program: {
+    id: 'second-award-id', kind: 'scholarship', institution: 'Example Foundation', name: 'Award', country: 'Exampleland', intake: '', sourceEvidence,
+  } });
+  assert.deepEqual(result, { id: 'existing-award', duplicate: true });
+  assert.equal(assessments, 0);
 });
 
 test('queue and pause workflows reuse the daily planner and repository while never sending mail', async () => {
