@@ -3,6 +3,8 @@ import type { NextConfig } from 'next';
 const config: NextConfig = {
   poweredByHeader: false,
   turbopack: { root: process.cwd() },
+  // Private local reports and tokens must stay outside deployable server traces.
+  outputFileTracingExcludes: { '/*': ['./private-data/**/*'] },
   async headers() {
     return [{
       source: '/:path*',

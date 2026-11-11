@@ -41,7 +41,7 @@ export interface ProfessorCandidate {
 
 /** A search-result excerpt is a lead for review, never verified applicant-facing evidence. */
 export interface DiscoveryEvidence {
-  kind: 'search-result' | 'official-page' | 'professor-profile' | 'program' | 'contact';
+  kind: 'search-result' | 'official-page' | 'professor-profile' | 'research' | 'program' | 'contact';
   sourceUrl: string;
   excerpt: string;
   retrievedAt: string;

@@ -43,6 +43,16 @@ export interface ApplicantProfile {
   };
 }
 
+export function isApplicantProfileIncomplete(profile: ApplicantProfile | undefined): boolean {
+  if (!profile) return true;
+  const { applicant } = profile;
+  return !applicant.nationality.trim() || !applicant.currentLocation.trim() ||
+    !applicant.degree.title.trim() || !applicant.degree.institution.trim() || !applicant.degree.country.trim() ||
+    applicant.degree.graduationYear === null || !applicant.degree.classification.trim() || applicant.degree.gpa === null ||
+    !applicant.target.intake.trim() || applicant.target.fields.length === 0 || applicant.target.researchInterests.length === 0 ||
+    applicant.target.countries.length === 0 || applicant.target.fundingTypes.length === 0;
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -50,14 +60,20 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function optionalRecord(source: Record<string, unknown>, key: string, label: string): Record<string, unknown> {
+  return source[key] === undefined ? {} : record(source[key], label);
+}
+
 function stringField(source: Record<string, unknown>, key: string, label: string): string {
   const value = source[key];
+  if (value === undefined) return '';
   if (typeof value !== 'string') throw new Error(`${label}.${key} must be a string`);
   return value;
 }
 
 function nullableNumberField(source: Record<string, unknown>, key: string, label: string): number | null {
   const value = source[key];
+  if (value === undefined) return null;
   if (value === null) return null;
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(`${label}.${key} must be a finite number or null`);
@@ -67,6 +83,7 @@ function nullableNumberField(source: Record<string, unknown>, key: string, label
 
 function stringArrayField(source: Record<string, unknown>, key: string, label: string): string[] {
   const value = source[key];
+  if (value === undefined) return [];
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) {
     throw new Error(`${label}.${key} must be an array of strings`);
   }
@@ -85,18 +102,24 @@ function countryArrayField(source: Record<string, unknown>, key: string, label: 
   return countries;
 }
 
+/** Supplies a neutral in-memory setup shape; it is persisted only after the owner saves it. */
+export function createEmptyApplicantProfile(): ApplicantProfile {
+  return parseApplicantProfile({ applicant: { target: { degreeLevel: 'masters' } } });
+}
+
 /** Validates local profile JSON at runtime; TypeScript types alone do not validate file contents. */
 export function parseApplicantProfile(value: unknown): ApplicantProfile {
   const root = record(value, 'profile');
-  const applicant = record(root.applicant, 'profile.applicant');
-  const degree = record(applicant.degree, 'profile.applicant.degree');
-  const target = record(applicant.target, 'profile.applicant.target');
-  const englishEvidence = record(applicant.englishEvidence, 'profile.applicant.englishEvidence');
-  const documents = record(applicant.documents, 'profile.applicant.documents');
+  const applicant = optionalRecord(root, 'applicant', 'profile.applicant');
+  const degree = optionalRecord(applicant, 'degree', 'profile.applicant.degree');
+  const target = optionalRecord(applicant, 'target', 'profile.applicant.target');
+  const englishEvidence = optionalRecord(applicant, 'englishEvidence', 'profile.applicant.englishEvidence');
+  const documents = optionalRecord(applicant, 'documents', 'profile.applicant.documents');
 
-  const degreeLevel = stringField(target, 'degreeLevel', 'profile.applicant.target');
+  const degreeLevel = target.degreeLevel === undefined ? 'masters' : stringField(target, 'degreeLevel', 'profile.applicant.target');
   if (degreeLevel !== 'masters') throw new Error('profile.applicant.target.degreeLevel must be masters');
-  const timezone = stringField(target, 'timezone', 'profile.applicant.target');
+  const configuredTimezone = stringField(target, 'timezone', 'profile.applicant.target');
+  const timezone = configuredTimezone.trim() || 'UTC';
   try {
     new Intl.DateTimeFormat('en', { timeZone: timezone });
   } catch {

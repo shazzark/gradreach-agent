@@ -16,6 +16,8 @@ const mongoUri = getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEG
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
   'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',
+  'discovery_job_runs',
+  'saved_lead_reprocess_runs', 'confirmed_professors',
 ];
 
 function sampleCandidate(id: string, email: string): ProfessorCandidate {
@@ -92,6 +94,86 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     for (let index = 0; index < 5; index += 1) assert.equal(await repositories.schedulerControl.reserveDailySend(`2026-10-19T10:0${index}:00Z`), true);
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-19T10:05:00Z'), false);
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-20T00:00:00Z'), true);
+
+    stage = 'discovery_run_diagnostic_storage';
+    const discoveryRun = {
+      id: 'synthetic-diagnostic-run', scheduledFor: '2026-10-20T09:00:00.000Z', startedAt: '2026-10-20T09:00:00.000Z',
+      country: 'Synthetic country', state: 'completed' as const,
+      counts: { searches: 1, results: 1, saved: 0, duplicates: 0, rejections: 1, fetchFailures: 0, inspected: 0, inspectionFailures: 0 },
+      resultDiagnostics: [{ resultNumber: 1, stage: 'professor_evidence' as const, reason: 'no_named_professor_identity' }],
+    };
+    assert.equal(await repositories.discoveryRuns.claim({ ...discoveryRun, state: 'running' }), true);
+    await repositories.discoveryRuns.finish(discoveryRun);
+    assert.deepEqual((await repositories.discoveryRuns.list(10)).find((item) => item.id === discoveryRun.id), discoveryRun);
+    const storedRun = await db.collection<Document & { _id: string }>('discovery_job_runs').findOne({ _id: discoveryRun.id });
+    const serializedRun = JSON.stringify(storedRun?.run);
+    assert.equal(serializedRun.includes('query-canary'), false);
+    assert.equal(serializedRun.includes('profile-canary'), false);
+
+    stage = 'saved_lead_reprocessing_run_storage';
+    const reprocessRun = {
+      id: 'synthetic-reprocess-run', state: 'running' as const, startedAt: '2026-10-20T10:00:00.000Z',
+      counts: { inspected: 0, enriched: 0, unchanged: 0, failed: 0, pageFetches: 0 }, reasonCounts: {},
+      omittedByLeadLimit: 0, duplicateIdentifiersSkipped: 0,
+      results: [],
+    };
+    await repositories.savedLeadReprocessRuns.start(reprocessRun);
+    const reprocessResult = {
+      candidateId: 'candidate-b', outcome: 'enriched' as const, reasonCode: 'evidence_added' as const,
+      diagnostics: {
+        stageOutcome: 'enriched' as const,
+        traversal: {
+          directoryFetched: true, profileLinksConsidered: 3, profileLinksSelected: 1, profileLinksFetched: 1,
+          identityEstablished: true, researchLinksConsidered: 4, researchLinksEligible: 2,
+          researchLinksSelected: 2, researchLinksFetched: 1, relevantResearchEstablished: true,
+        },
+      },
+    };
+    assert.equal(await repositories.savedLeadReprocessRuns.recordResult(reprocessRun.id, reprocessResult), true);
+    assert.equal(await repositories.savedLeadReprocessRuns.recordResult(reprocessRun.id, reprocessResult), true);
+    const completedReprocessRun = {
+      ...reprocessRun, state: 'completed' as const, finishedAt: '2026-10-20T10:01:00.000Z',
+      counts: { inspected: 1, enriched: 1, unchanged: 0, failed: 0, pageFetches: 2 },
+      reasonCounts: { evidence_added: 1 }, results: [reprocessResult],
+    };
+    await repositories.savedLeadReprocessRuns.finish(completedReprocessRun);
+    assert.deepEqual(await repositories.savedLeadReprocessRuns.get(reprocessRun.id), completedReprocessRun);
+    assert.deepEqual((await repositories.savedLeadReprocessRuns.list()).map((item) => item.id), [reprocessRun.id]);
+    const storedReprocessRun = await db.collection<Document & { _id: string }>('saved_lead_reprocess_runs').findOne({ _id: reprocessRun.id });
+    const serializedReprocessRun = JSON.stringify(storedReprocessRun?.run);
+    assert.equal(serializedReprocessRun.includes('private query'), false);
+    assert.equal(serializedReprocessRun.includes('https://'), false);
+    assert.deepEqual((await repositories.savedLeadReprocessRuns.get(reprocessRun.id))?.results[0]?.diagnostics, reprocessResult.diagnostics);
+
+    stage = 'confirmed_professor_storage';
+    const confirmed = {
+      stableId: 'discovery-synthetic-confirmed', name: 'Synthetic Professor', institution: 'Example University', country: 'Canada',
+      officialProfileUrl: 'https://uwaterloo.ca/electrical-computer-engineering/profile/synthetic', researchEvidence: [],
+      researchStatus: 'matched' as const, researchStatusExplanation: 'Synthetic test evidence.', duplicate: false, sourceReports: ['synthetic-preview.json'],
+      localOwnerDecision: 'accepted_local_only' as const, approved: false as const, queued: false as const, sent: false as const,
+      researchOutcome: 'matched' as const,
+    };
+    assert.equal(await repositories.confirmedProfessors.upsert(confirmed), 'inserted');
+    assert.equal(await repositories.confirmedProfessors.upsert(confirmed), 'updated');
+    await db.collection<Document & { _id: string }>('confirmed_professors').updateOne({ _id: confirmed.stableId }, { $set: { ownerDecision: 'rejected', approved: true, queued: true, sent: true } });
+    assert.equal(await repositories.confirmedProfessors.upsert(confirmed), 'updated');
+    const confirmedDocument = await db.collection<Document & { _id: string }>('confirmed_professors').findOne({ _id: confirmed.stableId });
+    assert.equal(confirmedDocument?.ownerDecision, 'rejected');
+    assert.equal(confirmedDocument?.approved, true);
+    assert.equal(confirmedDocument?.queued, true);
+    assert.equal(confirmedDocument?.sent, true);
+    assert.equal(confirmedDocument?.researchOutcome, 'matched');
+
+    assert.equal(await repositories.candidates.appendValidatedResearchEvidence({
+      candidateId: 'candidate-b', officialProfileUrl: 'https://example.edu/faculty/synthetic',
+      professorName: 'Synthetic Professor', leadName: 'Synthetic Professor', runId: reprocessRun.id,
+      evidence: [{ kind: 'research', sourceUrl: 'https://example.edu/research/synthetic', excerpt: 'Synthetic evidence.', quote: 'Synthetic research quote.', retrievedAt: '2026-10-20T10:00:00.000Z', verification: 'unverified', region: 'Example', query: 'synthetic query' }],
+    }), true);
+    const markedCandidate = await db.collection<Document & { _id: string }>('discovery_leads').findOne({ _id: 'candidate-b' }, { projection: { lastReprocessedRunId: 1, 'candidate.status': 1, 'candidate.approvedForSending': 1, 'candidate.id': 1 } });
+    assert.equal(markedCandidate?.lastReprocessedRunId, reprocessRun.id);
+    assert.equal((markedCandidate?.candidate as Record<string, unknown> | undefined)?.status, 'researching');
+    assert.equal((markedCandidate?.candidate as Record<string, unknown> | undefined)?.approvedForSending, false);
+    assert.equal((markedCandidate?.candidate as Record<string, unknown> | undefined)?.id, 'candidate-b');
 
     stage = 'attempt_storage';
     const attempt: OutreachAttempt = {

@@ -14,11 +14,11 @@ Create a separate Google OAuth client for website sign-in:
 4. Add this exact authorized redirect URI: `https://YOUR-HOSTNAME/api/auth/callback/google`.
 5. If the consent screen is in testing mode, add the exact owner Google account as a test user. Keep the app unpublished unless there is a deliberate later decision to publish it.
 
-The website callback accepts a verified Google email only when it matches `GRADREACH_OWNER_EMAIL`. A missing or invalid owner email denies access. The sign-in page is public so the owner can start login; all other pages and API requests are protected. There is no account creation or invitation route.
+The website callback accepts a verified Google email only when it matches `GRADREACH_OWNER_EMAIL`. A missing or invalid owner email denies access. The public welcome page at `/` contains no applicant or database data. The owner workspace, starting at `/workspace`, and all data actions remain protected. An unauthenticated visit to a workspace link redirects to sign-in and returns to that same local path after successful login. There is no account creation or invitation route.
 
 ## Private hosting settings
 
-Vercel is a prepared option for this Next.js app; it is not yet linked or deployed. For the production environment, configure these values in the hosting provider's private environment-variable settings. Do not add them to Git, client code, `NEXT_PUBLIC_*`, or chat.
+The production app now uses a custom Node.js server for authenticated Socket.IO progress updates as well as the Next.js website. It must run as a persistent Node process on a host that supports WebSocket upgrades; a serverless Next.js deployment is not suitable for this runtime. No host is linked or deployed. For production, configure these values in the host's private environment-variable settings. Do not add them to Git, client code, `NEXT_PUBLIC_*`, or chat.
 
 | Variable | Value to enter privately |
 |---|---|
@@ -41,9 +41,9 @@ Do not configure production credentials in Preview or other untrusted environmen
 
 ## Hosting and Atlas network
 
-Connect the repository to the hosting account, select the production branch and final domain, and use the standard Next.js build (`npm run build`) and start (`npm run start`) commands with Node.js 22. Set the production environment variables only after the domain is fixed so `AUTH_URL` and the Google redirect URI match it exactly.
+Connect the repository to a persistent Node.js hosting account, select the production branch and final domain, and use `npm run build` followed by `npm run start` with Node.js 22. The start command launches the custom HTTP/Next.js/Socket.IO server. Configure the proxy to support WebSocket upgrades and preserve the canonical `Host` and HTTPS origin. Set the production environment variables only after the domain is fixed so `AUTH_URL` and the Google redirect URI match it exactly.
 
-Atlas must accept connections from the deployed server. Vercel's default outbound addresses are dynamic. Vercel documents [Static IPs](https://vercel.com/kb/guide/how-to-allowlist-deployment-ip-address) for Pro and Enterprise plans; enable the feature for the selected function region, then add only the assigned egress addresses to the Atlas IP access list. Do not use a broad `0.0.0.0/0` rule. If the hosting account cannot provide stable egress at an acceptable plan/cost, choose a host with fixed outbound IPs before deployment. No Atlas IP rule has been changed by this work.
+Atlas must accept connections from the deployed server. Choose a host that supports a persistent Node process, WebSocket upgrades, and stable outbound IPs; then add only those exact egress addresses to the Atlas IP access list. Do not use a broad `0.0.0.0/0` rule. No Atlas IP rule has been changed by this work.
 
 Ensure the `gradreach` database already contains the `primary` applicant profile and existing GradReach collections before directing the site to it. The website uses `connectMongoStorage`, including the discovery collection migration guard, and only connects from authenticated server operations. Do not point Preview at production data.
 
@@ -62,4 +62,6 @@ The website can review drafts, record explicit approval, plan queue rows, pause 
 5. Confirm the `primary` GradReach profile exists in the `gradreach` database.
 6. Complete separate Gmail browser consent locally when desired. This is not required to sign in to the website and does not authorize sending.
 
-Do not send secrets to the repository or chat. After these steps, run an owner sign-in check, verify a second Google account is denied, verify unauthenticated page/API/action access is denied, and verify website sign-in has not enabled Gmail. Deployment and live OAuth remain unverified until those checks are performed against the chosen host.
+Do not send secrets to the repository or chat. For local review before deployment, authorize `http://localhost:3000` as a Google JavaScript origin and `http://localhost:3000/api/auth/callback/google` as the redirect URI. Set `AUTH_URL=http://localhost:3000` locally along with the owner email, OAuth client, private session secret, and `AUTH_TRUST_HOST=true`; leave existing MongoDB settings unchanged. Run `npm run dev`, open `/`, and choose **Open my workspace**. Live OAuth consent is required before owner data can be viewed.
+
+After deployment, run an owner sign-in check, verify a second Google account is denied, verify unauthenticated page/API/action access is denied, and verify website sign-in has not enabled Gmail. Deployment and live OAuth remain unverified until those checks are performed against the chosen host.

@@ -120,7 +120,7 @@ test('Gmail adapter sends the approved draft through the send-only endpoint usin
     process.env.EMAIL_PROVIDER_CLIENT_SECRET = 'synthetic-client-secret';
     process.env.EMAIL_PROVIDER_TOKEN_PATH = tokenPath;
     await writeFile(tokenPath, JSON.stringify({
-      access_token: 'synthetic-access-token', expires_at: Date.now() + 60 * 60 * 1000,
+      access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token', expires_at: Date.now() + 60 * 60 * 1000,
       scope: GMAIL_SEND_SCOPE, token_type: 'Bearer',
     }));
     globalThis.fetch = (async (input, init) => {
@@ -164,6 +164,26 @@ test('delivery requires explicit candidate approval and an unchanged approved dr
   assert.equal(result.status, 'empty');
   assert.equal(store.attempts[0]?.state, 'failed');
   assert.equal(store.attempts[0]?.failureCode, 'approved-draft-changed');
+  assert.equal(sends, 0);
+});
+
+test('delivery never approves a draft on behalf of the owner', async () => {
+  const store = new MemoryDeliveryStore(); store.add('p1');
+  const candidate = store.candidates.get('p1')!;
+  candidate.status = 'ready-for-review';
+  candidate.approvedForSending = false;
+  delete candidate.approvedAt;
+  delete candidate.approvedDraftHash;
+  let sends = 0;
+  const service = new GmailDeliveryService({ repositories: store.repositories, send: async () => { sends += 1; return 'synthetic-id'; }, sendingEnabled: true });
+
+  assert.equal((await service.deliverNext('2026-10-20T09:00:00.000Z')).status, 'empty');
+  assert.equal(candidate.status, 'ready-for-review');
+  assert.equal(candidate.approvedForSending, false);
+  assert.equal(candidate.approvedAt, undefined);
+  assert.equal(candidate.approvedDraftHash, undefined);
+  assert.equal(store.attempts[0]?.state, 'failed');
+  assert.match(store.attempts[0]?.failureCode ?? '', /^candidate-not-approved:/);
   assert.equal(sends, 0);
 });
 
@@ -216,4 +236,32 @@ test('explicitly rejected sends can retry with audit state; uncertain outcomes n
   assert.equal((await unknownService.deliverNext('2026-10-20T09:00:00.000Z')).status, 'uncertain');
   assert.equal((await unknownService.deliverNext('2026-10-20T09:10:00.000Z')).status, 'empty');
   assert.equal(unknownSends, 1);
+});
+
+test('a provider success without a persisted sent audit becomes uncertain and is never resent', async () => {
+  const store = new MemoryDeliveryStore(); store.add('p1');
+  let sends = 0;
+  let auditUpdates = 0;
+  const repositories = {
+    ...store.repositories,
+    attempts: {
+      ...store.repositories.attempts,
+      updateDelivery: async (attempt: OutreachAttempt) => {
+        auditUpdates += 1;
+        if (auditUpdates === 1) return false;
+        return store.repositories.attempts.updateDelivery(attempt);
+      },
+    },
+  };
+  const service = new GmailDeliveryService({
+    repositories, sendingEnabled: true,
+    send: async () => { sends += 1; return 'synthetic-provider-id'; },
+  });
+
+  assert.equal((await service.deliverNext('2026-10-20T09:00:00.000Z')).status, 'uncertain');
+  assert.equal(store.attempts[0]?.state, 'uncertain');
+  assert.equal(store.attempts[0]?.failureCode, 'delivery-audit-state-conflict-outcome-unknown');
+  assert.equal(store.candidates.get('p1')?.status, 'approved');
+  assert.equal((await service.deliverNext('2026-10-20T09:01:00.000Z')).status, 'empty');
+  assert.equal(sends, 1);
 });

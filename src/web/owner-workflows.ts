@@ -6,6 +6,35 @@ import { parseApplicantProfile, type ApplicantProfile } from '../domain/applican
 import type { GradReachRepositories } from '../infrastructure/mongo-storage.ts';
 import type { OutreachAttempt } from '../domain/outreach-queue.ts';
 import { planDailyOutreach } from '../application/daily-outreach-planner.ts';
+import { DEFAULT_DISCOVERY_SCHEDULE, validateDiscoverySchedule, type DiscoverySchedule } from '../application/automatic-discovery.ts';
+import { OFFICIAL_HOSTS_BY_REGION } from '../config/official-host-allowlist.ts';
+
+export async function getAutomaticDiscoverySettings(repositories: GradReachRepositories) {
+  const [profile, savedSchedule, runs, checks] = await Promise.all([
+    repositories.profiles.get('primary'), repositories.discoverySchedule.get(), repositories.discoveryRuns.list(20), repositories.discoveryChecks.list(20),
+  ]);
+  const configuredCountries = profile?.applicant.target.countries ?? [];
+  const verifiedCountries = configuredCountries.filter((country) => Object.hasOwn(OFFICIAL_HOSTS_BY_REGION, country));
+  return { schedule: savedSchedule ?? { ...DEFAULT_DISCOVERY_SCHEDULE }, verifiedCountries, runs, checks };
+}
+
+export async function saveAutomaticDiscoverySettings(repositories: GradReachRepositories, schedule: DiscoverySchedule) {
+  const profile = await repositories.profiles.get('primary');
+  if (!profile) throw new Error('Profile is unavailable');
+  const allowed = profile.applicant.target.countries.filter((country) => Object.hasOwn(OFFICIAL_HOSTS_BY_REGION, country));
+  const validated = validateDiscoverySchedule(schedule, allowed);
+  await repositories.discoverySchedule.save(validated);
+  return validated;
+}
+
+export async function toggleAutomaticDiscoveryPause(repositories: GradReachRepositories) {
+  const profile = await repositories.profiles.get('primary');
+  if (!profile) throw new Error('Profile is unavailable');
+  const current = await repositories.discoverySchedule.get() ?? { ...DEFAULT_DISCOVERY_SCHEDULE, timeZone: profile.applicant.target.timezone || 'Africa/Lagos' };
+  const next = { ...current, paused: !current.paused };
+  await repositories.discoverySchedule.save(next);
+  return next.paused;
+}
 
 export async function reviewProfessorEvidence(input: {
   repositories: GradReachRepositories;
@@ -63,6 +92,16 @@ export async function saveProfileSettings(input: {
   if (control.timeZone !== profile.applicant.target.timezone) {
     await input.repositories.schedulerControl.save({ ...control, timeZone: profile.applicant.target.timezone });
   }
+  return profile;
+}
+
+/** Saves only the primary applicant profile after the owner explicitly edits its settings. */
+export async function saveApplicantProfile(input: {
+  repositories: GradReachRepositories;
+  edited: ApplicantProfile;
+}): Promise<ApplicantProfile> {
+  const profile = parseApplicantProfile(input.edited);
+  await input.repositories.profiles.save('primary', profile);
   return profile;
 }
 

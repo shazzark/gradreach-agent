@@ -36,7 +36,10 @@ export interface SafeFailureRecord {
   syscall?: string;
   serverStates?: string[];
   braveErrorCode?: string;
+  braveErrorId?: string;
   requestId?: string;
+  redirectDestinationHost?: string;
+  redirectDestinationPath?: string;
 }
 
 export interface SafeResponseDiagnostics {
@@ -45,7 +48,10 @@ export interface SafeResponseDiagnostics {
   contentTypeIsHtml?: boolean | null;
   bodyEmpty?: boolean | null;
   braveErrorCode?: string;
+  braveErrorId?: string;
   requestId?: string;
+  redirectDestinationHost?: string;
+  redirectDestinationPath?: string;
 }
 
 const FAILURE_MESSAGES: Record<SafeFailureKind, string> = {
@@ -78,7 +84,10 @@ export class SanitizedIntegrationError extends Error {
     syscall?: string;
     serverStates?: string[];
     braveErrorCode?: string;
+    braveErrorId?: string;
     requestId?: string;
+    redirectDestinationHost?: string;
+    redirectDestinationPath?: string;
     contentTypeIsHtml?: boolean | null;
     bodyEmpty?: boolean | null;
   } = {}) {
@@ -98,7 +107,9 @@ export class SanitizedIntegrationError extends Error {
     const syscall = sanitizeSyscall(options.syscall);
     const serverStates = sanitizeServerStates(options.serverStates);
     const braveErrorCode = sanitizeIdentifier(options.braveErrorCode);
+    const braveErrorId = sanitizeIdentifier(options.braveErrorId);
     const requestId = sanitizeIdentifier(options.requestId);
+    const redirectDestination = sanitizeRedirectDestination(options.redirectDestinationHost, options.redirectDestinationPath);
     const message = kind === 'http_status' && statusCode
       ? `Remote service returned HTTP ${statusCode}.`
       : kind === 'rejected_redirect' && statusCode
@@ -127,9 +138,17 @@ export class SanitizedIntegrationError extends Error {
       ...(syscall ? { syscall } : {}),
       ...(serverStates ? { serverStates } : {}),
       ...(braveErrorCode ? { braveErrorCode } : {}),
+      ...(braveErrorId ? { braveErrorId } : {}),
       ...(requestId ? { requestId } : {}),
+      ...(redirectDestination ? { redirectDestinationHost: redirectDestination.host, redirectDestinationPath: redirectDestination.path } : {}),
     };
   }
+}
+
+function sanitizeRedirectDestination(host: string | undefined, path: string | undefined): { host: string; path: string } | undefined {
+  if (!host || !path || host.length > 253 || !path.startsWith('/') || path.length > 256 ||
+      !/^[a-z0-9.-]+$/i.test(host) || !/^\/[A-Za-z0-9._~/-]*$/.test(path) || path.split('/').includes('..')) return undefined;
+  return { host: host.toLowerCase(), path };
 }
 
 /** Produces a stable failure record without copying raw error messages, causes, headers, or response bodies. */
@@ -399,6 +418,46 @@ export function safeBraveResponseDiagnostics(response: Response, sensitiveValues
     ...(braveErrorCode ? { braveErrorCode } : {}),
     ...(requestId ? { requestId } : {}),
   };
+}
+
+/** Extracts only Brave's documented error code and occurrence ID; response details are never retained. */
+export async function safeBraveErrorResponseDiagnostics(response: Response, sensitiveValues: string[] = []): Promise<SafeResponseDiagnostics> {
+  const details = safeBraveResponseDiagnostics(response, sensitiveValues);
+  try {
+    const reader = response.clone().body?.getReader();
+    if (!reader) return details;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 16_384) {
+        await reader.cancel();
+        return details;
+      }
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const payload: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return details;
+    const error = (payload as Record<string, unknown>).error;
+    if (!error || typeof error !== 'object' || Array.isArray(error)) return details;
+    const record = error as Record<string, unknown>;
+    const code = typeof record.code === 'string' ? sanitizeIdentifier(record.code) : undefined;
+    const id = typeof record.id === 'string' ? sanitizeIdentifier(record.id) : undefined;
+    const isSensitive = (value: string | undefined) => Boolean(value && sensitiveValues.some((sensitive) => {
+      const normalized = sensitive.trim().toLowerCase();
+      return normalized && (value.toLowerCase().includes(normalized) || normalized.includes(value.toLowerCase()));
+    }));
+    return {
+      ...details,
+      ...(code && !isSensitive(code) ? { braveErrorCode: code } : {}),
+      ...(id && !isSensitive(id) ? { braveErrorId: id } : {}),
+    };
+  } catch { return details; }
 }
 
 function sanitizeResourceUrl(value: string | undefined): string | undefined {

@@ -11,6 +11,34 @@ export interface OwnerSession {
 }
 
 export const GOOGLE_SIGN_IN_SCOPES = 'openid email profile';
+export const DEFAULT_WORKSPACE_PATH = '/workspace';
+
+export function isPublicWebsitePath(pathname: string): boolean {
+  return pathname === '/' || pathname === '/sign-in' || pathname === '/icon.svg' || pathname === '/apple-icon' || pathname === '/manifest.webmanifest' || pathname === '/api/auth' || pathname.startsWith('/api/auth/');
+}
+
+/** Converts Auth.js callback URLs to local paths so sign-in cannot become an open redirect. */
+export function safeWorkspaceReturnPath(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 2048 || value.includes('\\')) return DEFAULT_WORKSPACE_PATH;
+  const candidate = value.trim();
+  if (!candidate || candidate.startsWith('//')) return DEFAULT_WORKSPACE_PATH;
+
+  try {
+    const base = 'https://gradreach.invalid';
+    const url = new URL(candidate, base);
+    const isRelative = candidate.startsWith('/');
+    if ((!isRelative && url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
+      return DEFAULT_WORKSPACE_PATH;
+    }
+    const path = `${url.pathname}${url.search}`;
+    if (url.pathname === '/sign-in' || url.pathname.startsWith('/sign-in/') || url.pathname === '/api/auth' || url.pathname.startsWith('/api/auth/')) {
+      return DEFAULT_WORKSPACE_PATH;
+    }
+    return path.startsWith('/') && !path.startsWith('//') ? path : DEFAULT_WORKSPACE_PATH;
+  } catch {
+    return DEFAULT_WORKSPACE_PATH;
+  }
+}
 
 function normalizedEmail(email: unknown): string | undefined {
   if (typeof email !== 'string') return undefined;

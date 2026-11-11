@@ -17,7 +17,7 @@ const execFileAsync = promisify(execFile);
 
 interface GmailTokenSet {
   access_token: string;
-  refresh_token?: string;
+  refresh_token: string;
   expires_at: number;
   scope?: string;
   token_type: 'Bearer';
@@ -61,7 +61,8 @@ async function restrictToCurrentUser(path: string): Promise<void> {
 async function readTokens(path: string): Promise<GmailTokenSet> {
   try {
     const parsed = JSON.parse(await readFile(resolve(path), 'utf8')) as Partial<GmailTokenSet>;
-    if (typeof parsed.access_token !== 'string' || typeof parsed.expires_at !== 'number' || parsed.token_type !== 'Bearer') throw new Error();
+    if (typeof parsed.access_token !== 'string' || typeof parsed.refresh_token !== 'string' || !parsed.refresh_token ||
+        typeof parsed.expires_at !== 'number' || parsed.token_type !== 'Bearer') throw new Error();
     if (parsed.scope !== GMAIL_SEND_SCOPE) throw new Error();
     return parsed as GmailTokenSet;
   } catch {
@@ -120,12 +121,13 @@ export async function beginGmailAuthorization(options: {
       });
       if (!response.ok) throw new Error(`Gmail OAuth token exchange failed with HTTP ${response.status}`);
       const payload = await response.json() as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; scope?: unknown; token_type?: unknown };
-      if (typeof payload.access_token !== 'string' || typeof payload.expires_in !== 'number' || payload.token_type !== 'Bearer' || payload.scope !== GMAIL_SEND_SCOPE) {
-        throw new Error('Gmail OAuth response did not grant the required send-only scope');
+      if (typeof payload.access_token !== 'string' || typeof payload.refresh_token !== 'string' || !payload.refresh_token ||
+          typeof payload.expires_in !== 'number' || payload.token_type !== 'Bearer' || payload.scope !== GMAIL_SEND_SCOPE) {
+        throw new Error('Gmail OAuth response did not grant the required send-only scope with refresh capability');
       }
       await saveTokens(tokenPath, {
         access_token: payload.access_token,
-        ...(typeof payload.refresh_token === 'string' ? { refresh_token: payload.refresh_token } : {}),
+        refresh_token: payload.refresh_token,
         expires_at: Date.now() + payload.expires_in * 1000,
         scope: payload.scope,
         token_type: 'Bearer',
@@ -138,7 +140,6 @@ export async function beginGmailAuthorization(options: {
 async function accessToken(path: string, clientId: string, clientSecret: string, fetchImpl: typeof fetch): Promise<string> {
   const tokens = await readTokens(path);
   if (tokens.expires_at > Date.now() + 60_000) return tokens.access_token;
-  if (!tokens.refresh_token) throw new Error('Gmail authorization expired; authorize Gmail again');
   const response = await fetchImpl(TOKEN_URL, {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }),
@@ -201,6 +202,31 @@ async function sendGmailMessage(message: GmailMessage): Promise<string> {
   catch { throw new GmailDeliveryError('gmail-response-outcome-unknown', 'unknown', false); }
   if (typeof payload.id !== 'string') throw new GmailDeliveryError('gmail-message-id-missing-outcome-unknown', 'unknown', false);
   return payload.id;
+}
+
+/** Sends one fixed owner-addressed transport check outside the professor queue. */
+export async function sendGmailSelfTest(): Promise<{ status: 'delivered' | 'failed' | 'uncertain'; providerMessageId?: string; failureCode?: string }> {
+  const auditPath = resolve('private-data/gmail-self-test-audit.json');
+  const recipient = 'chidozinnam@gmail.com';
+  const subject = 'GradReach Gmail delivery test';
+  const body = 'This is a one-time test of the GradReach Gmail delivery workflow. It contains no professor outreach, and no reply is needed.';
+  let previous: { status?: string } | undefined;
+  try { previous = JSON.parse(await readFile(auditPath, 'utf8')) as { status?: string }; }
+  catch (error) { if (typeof error === 'object' && error !== null && 'code' in error && error.code !== 'ENOENT') throw new Error('Gmail self-test audit is unreadable; refusing to send'); }
+  if (previous) throw new Error('Gmail self-test was already started; refusing to send again');
+  await mkdir(dirname(auditPath), { recursive: true, mode: 0o700 });
+  const audit = { status: 'started', recipient, subject, startedAt: new Date().toISOString() };
+  await writeFile(auditPath, `${JSON.stringify(audit)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  try {
+    const providerMessageId = await sendGmailMessage({ to: recipient, subject, body });
+    await writeFile(auditPath, `${JSON.stringify({ ...audit, status: 'delivered', providerMessageId, completedAt: new Date().toISOString() })}\n`, 'utf8');
+    return { status: 'delivered', providerMessageId };
+  } catch (error) {
+    const failure = error instanceof GmailDeliveryError ? error : new GmailDeliveryError('provider-outcome-unknown', 'unknown', false);
+    const status = failure.certainty === 'unknown' ? 'uncertain' : 'failed';
+    await writeFile(auditPath, `${JSON.stringify({ ...audit, status, failureCode: failure.code, completedAt: new Date().toISOString() })}\n`, 'utf8');
+    return { status, failureCode: failure.code };
+  }
 }
 
 export interface GmailDeliveryResult {
@@ -281,7 +307,9 @@ export class GmailDeliveryService {
         const sent: OutreachAttempt = {
           ...claimed, state: 'sent', sentAt: instant.toISOString(), providerMessageId,
         };
-        await this.repositories.attempts.updateDelivery(sent);
+        if (!await this.repositories.attempts.updateDelivery(sent)) {
+          throw new GmailDeliveryError('delivery-audit-state-conflict-outcome-unknown', 'unknown', false);
+        }
         await this.repositories.candidates.markSent(candidate!.id);
         return { status: 'delivered', candidateId: candidate!.id, attemptCount: sent.deliveryAttempts ?? 1, recoveredUncertain };
       } catch (error) {

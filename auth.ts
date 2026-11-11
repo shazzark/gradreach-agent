@@ -1,6 +1,6 @@
 import NextAuth from 'next-auth';
 import Google from 'next-auth/providers/google';
-import { GOOGLE_SIGN_IN_SCOPES, isAllowedGoogleSignIn, isOwnerSession, isVerifiedGoogleOwner } from './src/web/owner-access.ts';
+import { GOOGLE_SIGN_IN_SCOPES, isAllowedGoogleSignIn, isOwnerSession, isPublicWebsitePath, isVerifiedGoogleOwner } from './src/web/owner-access.ts';
 
 export { GOOGLE_SIGN_IN_SCOPES };
 
@@ -32,7 +32,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     authorized({ auth: session, request }) {
       const pathname = request.nextUrl.pathname;
-      if (pathname === '/sign-in' || pathname === '/api/auth' || pathname.startsWith('/api/auth/')) return true;
+      if (isPublicWebsitePath(pathname)) return true;
       if (isOwnerSession(session, process.env.GRADREACH_OWNER_EMAIL)) return true;
       if (pathname.startsWith('/api/')) {
         return Response.json({ error: 'unauthorized' }, { status: 401, headers: { 'cache-control': 'no-store' } });

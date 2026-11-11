@@ -5,7 +5,7 @@ import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../src/domain/outreach-queue.ts';
 import type { ProgramRecord } from '../src/domain/program-assessment.ts';
 import type { GradReachRepositories } from '../src/infrastructure/mongo-storage.ts';
-import { addPlannedAttempts, approveReviewedDraft, assessSavedProgram, importAndAssessProgram, recordOutreachOutcome, reviewProfessorEvidence, saveProfileSettings, saveReviewedDraft, toggleOutreachPause } from '../src/web/owner-workflows.ts';
+import { addPlannedAttempts, approveReviewedDraft, assessSavedProgram, importAndAssessProgram, recordOutreachOutcome, reviewProfessorEvidence, saveApplicantProfile, saveProfileSettings, saveReviewedDraft, toggleOutreachPause } from '../src/web/owner-workflows.ts';
 
 const profile = parseApplicantProfile(JSON.parse(await readFile(new URL('../private.profile.example.json', import.meta.url), 'utf8')));
 profile.applicant.fullName = 'Synthetic Applicant';
@@ -82,6 +82,52 @@ test('profile settings preserve private identity and degree fields while persist
   assert.equal(state.savedProfile, next);
   assert.equal(state.savedControl?.timeZone, 'UTC');
   assert.equal(state.savedControl?.paused, true);
+});
+
+test('saving complete research-interest entries preserves commas and every other profile field', async () => {
+  const current = structuredClone(profile);
+  current.applicant.target.researchInterests = ['Cybersecurity', 'privacy', 'and network security'];
+  const before = structuredClone(current);
+  const interests = [
+    'Cybersecurity, privacy, and network security', 'AI and machine learning',
+    'Software engineering, cloud, and distributed systems',
+    'Robotics and autonomous systems, including intelligent robotics and robot perception',
+    'Database systems and data-intensive applications',
+    'Mobile computing and human-computer interaction, including accessibility',
+  ];
+  const state: { savedProfile?: unknown; savedControl?: SchedulerControl } = {};
+  const repos = repositories(state);
+  const saved = await saveProfileSettings({ repositories: repos, current, settings: { researchInterests: interests } });
+  assert.deepEqual(saved.applicant.target.researchInterests, interests);
+  assert.deepEqual(saved.applicant, { ...before.applicant, target: { ...before.applicant.target, researchInterests: interests } });
+  assert.deepEqual((state.savedProfile as typeof profile).applicant.target.researchInterests, interests);
+});
+
+test('full profile setup saves only primary and persists the owner-edited country list', async () => {
+  const current = structuredClone(profile);
+  current.applicant.target.countries = ['Country A', 'Country B'];
+  const edited = structuredClone(current);
+  edited.applicant.target.countries = ['Japan', 'Holy See'];
+  edited.applicant.target.researchInterests = ['privacy-preserving machine learning', 'reliable distributed systems'];
+  edited.applicant.email = '';
+  edited.applicant.phone = '';
+  edited.applicant.degree.gpaScale = null;
+  edited.applicant.englishEvidence = { testStatus: '', testName: '', score: '', testDate: '', mediumOfInstructionLetter: '' };
+  edited.applicant.documents = { academicCvPath: '', transcriptPath: '', portfolioUrl: '', githubUrl: '', projectUrls: [] };
+  const state: { savedProfile?: unknown; savedControl?: SchedulerControl } = {
+    savedControl: { paused: true, timeZone: 'UTC', dailyLimit: 4 },
+  };
+  const repos = repositories(state);
+  await saveApplicantProfile({ repositories: repos, edited });
+  const saved = state.savedProfile as typeof profile;
+  assert.deepEqual(saved.applicant.target.countries, ['Japan', 'Holy See']);
+  assert.deepEqual(saved.applicant.target.researchInterests, ['privacy-preserving machine learning', 'reliable distributed systems']);
+  assert.equal(saved.applicant.email, '');
+  assert.equal(saved.applicant.phone, '');
+  assert.equal(saved.applicant.degree.gpaScale, null);
+  assert.equal(saved.applicant.documents.transcriptPath, '');
+  assert.equal(state.savedControl?.timeZone, 'UTC');
+  assert.equal(state.savedControl?.dailyLimit, 4);
 });
 
 test('website draft workflow uses the source-cited draft service and cannot approve while saving', async () => {

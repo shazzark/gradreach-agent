@@ -21,7 +21,51 @@ Each active entry is an exact HTTPS hostname taken from a university page that s
 | Portugal | Técnico Lisboa, University of Lisbon | `tecnico.ulisboa.pt` | [Telecommunications and Informatics Engineering](https://tecnico.ulisboa.pt/en/education/courses/masters-programmes/telecommunications-and-informatics-engineering/) | MSc covering distributed systems, network management, Internet security, AI-enabled networks, and computing |
 | Italy | Politecnico di Milano | `www.polimi.it` | [Computer Science and Engineering](https://www.polimi.it/en/education/laurea-programmes/programme-detail/computer-science-and-engineering) | Current official MSc programme page; covers the active Computer Science target |
 
-Eleven active countries have verified exact hosts: Australia, Belgium, Canada, China, Italy, Japan, New Zealand, Portugal, South Korea, Switzerland, and the United States. Search findings are stored locally under the ignored `outputs/` directory. They remain unverified leads and require human source review before any candidate approval. Thailand is no longer an active target; its former host is retained only as historical pilot evidence below.
+Eleven active countries initially had verified exact hosts. The 2026-11-04 official-source audit below brings coverage to 42 of 45 configured countries. Search findings are stored locally under the ignored `outputs/` directory. They remain unverified leads and require human source review before any candidate approval. Thailand is no longer an active target; its former host is retained only as historical pilot evidence below.
+
+## 2026-11-04 country coverage audit
+
+Each row below was checked against an official university-owned page on 2026-11-04 that establishes the exact host and identifies a computing faculty, professor, staff, or researcher directory. The directory URL is recorded separately from the university's host-verification URL where they differ. Only these exact hosts are eligible; parent domains are not implied.
+
+| Profile region | Exact host | Official host and faculty-directory evidence |
+| --- | --- | --- |
+| Japan | `www.kurims.kyoto-u.ac.jp` | [Kyoto University identifies RIMS](https://www.kyoto-u.ac.jp/en/research/fields/research-institutes/research-institute-for-mathematical-sciences-rims) and links this host; [RIMS member directory](https://www.kurims.kyoto-u.ac.jp/en/list-01.html) lists members including computer-laboratory faculty. |
+| Japan | `www.media.kyoto-u.ac.jp` | [Kyoto University ACCMS page](https://www.kyoto-u.ac.jp/en/about/profile/faculty/centers/accms) links this exact host; [ACCMS laboratories](https://www.media.kyoto-u.ac.jp/accms_web/en/activity_en/laboratories) lists labs and named professors. |
+| Japan | `global.k.kyoto-u.ac.jp` | [Kyoto University MEXT guidance](https://www.kyoto-u.ac.jp/sites/default/files/inline-files/MEXT_AAO_Guidelines-f688d0fdbfd674f09e35b3e7ecf63dd3.pdf) links this researcher directory; [Meet KU Researchers](https://global.k.kyoto-u.ac.jp/) contains named researcher profiles. |
+| Bosnia and Herzegovina | `www-ng.etf.unsa.ba` | [University of Sarajevo Faculty of Electrical Engineering](https://www-ng.etf.unsa.ba/en/about/structure-management/departments/computer-science-informatics/faculty) identifies the faculty and its computer science/informatics staff. |
+| Bulgaria | `tu-sofia.bg` | [Technical University of Sofia Computer Systems department](https://tu-sofia.bg/en/departments/computer-systems) identifies the official department and academic staff. |
+| Croatia | `www.fer.unizg.hr` | [University of Zagreb FER faculty directory](https://www.fer.unizg.hr/en/faculty_research/faculty) lists faculty; its [computing and intelligent systems department](https://www.fer.unizg.hr/en/about/structure_and_management/departments/department_of_electronics_microelectronics_computer_and_intelligent_systems) confirms relevance. |
+| Czechia | `cs.fel.cvut.cz` | [Czech Technical University Faculty of Electrical Engineering CS people directory](https://cs.fel.cvut.cz/en/people/?personCategory=1) lists academic staff. |
+| Denmark | `orbit.dtu.dk` | [DTU Research Database department people](https://orbit.dtu.dk/en/organisations/department-of-applied-mathematics-and-computer-science/persons/) lists researchers in Applied Mathematics and Computer Science. |
+| Estonia | `taltech.ee` | [TalTech Department of Software Science research groups](https://taltech.ee/en/department-of-software-science/research-groups) and [School of IT research groups](https://taltech.ee/en/research-groups/school-of-it) identify computing researchers. |
+| Finland | `www.aalto.fi` | [Aalto Department of Computer Science contacts](https://www.aalto.fi/en/department-of-computer-science/contact-us) lists department personnel and professors. |
+| France | `iut-sceaux.universite-paris-saclay.fr` | [Paris-Saclay IUT Sceaux faculty researchers](https://www.iut-sceaux.universite-paris-saclay.fr/recherche/enseignants-chercheurs-liut) lists enseignants-chercheurs. |
+| Germany | `www.cs.cit.tum.de` | [Technical University of Munich CS professorships](https://www.cs.cit.tum.de/en/cs/professuren/) lists computer-science chairs and professors. |
+| Greece | `robotics.ntua.gr` | [National Technical University of Athens Institute of Robotics people](https://robotics.ntua.gr/people/) lists institute members and researchers. |
+| Hungary | `compsci.elte.hu` | [Eötvös Loránd University Computer Science staff](https://compsci.elte.hu/en/staff/) lists department academic staff. |
+| Iceland | `www.ru.is` | [Reykjavik University Computer Science department](https://www.ru.is/en/departments/tolvunarfraedideild) identifies the department and its staff. |
+| Ireland | `www.tcd.ie` | [Trinity College Dublin School of Computer Science and Statistics academic staff](https://www.tcd.ie/scss/people/academic-staff/) lists faculty. |
+| Latvia | `research.lu.lv` | [University of Latvia Department of Computer Science persons](https://research.lu.lv/en/organisations/department-of-computer-science/persons/) lists researchers. |
+| Liechtenstein | `www.uni.li` | [University of Liechtenstein Department of Information Systems and Computer Science](https://www.uni.li/en/organization/department-information-systems-and-computer-science) identifies the department and academic staff. |
+| Lithuania | `mif.vu.lt` | [Vilnius University Institute of Computer Science](https://mif.vu.lt/lt3/en/about/structure/institute-of-computer-science) and its [Mathematical Computer Science department](https://mif.vu.lt/lt3/en/about/structure/institute-of-computer-science?catid=143&id=1335%3Adepartment-of-mathematical-computer-science&view=article) identify the faculty and researchers. |
+| Luxembourg | `www.uni.lu` | [University of Luxembourg CS people](https://www.uni.lu/fstm-en/research-departments/department-of-computer-science/people/) lists department members; the [department page](https://www.uni.lu/fstm-en/research-departments/department-of-computer-science/about/) confirms the official unit. |
+| Malta | `www.um.edu.mt` | [University of Malta ICT Computer Science staff](https://www.um.edu.mt/ict/cs/ourstaff/) lists academic staff. |
+| Moldova | `fcim.utm.md` | [Technical University of Moldova Software Engineering and Automatics department](https://fcim.utm.md/en/departments/department-of-software-engineering-and-automatics/) identifies the computing department and staff. |
+| Montenegro | `www.ucg.ac.me` | [University of Montenegro Faculty of Electrical Engineering staff](https://ucg.ac.me/osoblje/etf) lists faculty personnel. |
+| Netherlands | `vu.nl` | [Vrije Universiteit Amsterdam research sections](https://vu.nl/en/about-vu/faculties/faculty-of-science/more-about/research-sections) and [Computer Systems and Computer Science](https://vu.nl/en/about-vu/more-about/computer-systems-computer-science) identify relevant computing groups and staff. |
+| Norway | `ntnu.edu` | [NTNU Department of Computer Science people](https://www.ntnu.edu/idi/people/) lists professors and other faculty. |
+| Poland | `mimuw.edu.pl` | [University of Warsaw MIM employees](https://www.mimuw.edu.pl/en/employees/486/) lists faculty; the [faculty structure](https://www.mimuw.edu.pl/en/structure/faculty-of-mathematics-informatics-and-mechanics/) confirms the official unit. |
+| Russia | `cs.msu.ru` | [Moscow State University CS department](https://cs.msu.ru/en/departments/sp) identifies the department and faculty. |
+| Russia | `asvk.cs.msu.ru` | [MSU department staff](https://asvk.cs.msu.ru/en/about-department/staff/) lists the academic staff on this exact official subhost. |
+| Serbia | `etf.bg.ac.rs` | [University of Belgrade Computer Science and Information Technology department](https://www.etf.bg.ac.rs/en/departments/the-department-of-computer-science-and-information-technology) identifies the unit and staff. |
+| Slovakia | `fiit.stuba.sk` | [Slovak University of Technology FIIT faculty staff](https://www.fiit.stuba.sk/en/faculty/about-us/contacts/faculty-staff) lists academic staff. |
+| Slovenia | `fri.uni-lj.si` | [University of Ljubljana Faculty of Computer and Information Science employees](https://fri.uni-lj.si/en/about-faculty/employees) lists faculty. |
+| Spain | `etsiit.ugr.es` | [University of Granada ETSIIT teaching staff](https://etsiit.ugr.es/docencia/profesorado) lists professors; its [Computer Science and AI department page](https://etsiit.ugr.es/en/informacion-academica/departamentos/department-computer-science-and-artificial-intelligence) confirms the relevant unit. |
+| Sweden | `kth.se` | [KTH Theoretical Computer Science people directory](https://www.kth.se/directory/j/jht?l=en) lists university researchers and faculty. |
+| Ukraine | `csc.knu.ua` | [Taras Shevchenko National University of Kyiv CS faculty](https://csc.knu.ua/en/) and its [employee directory](https://iss.csc.knu.ua/en/about/employees.html) identify the computing faculty and staff. |
+| United Kingdom | `cst.cam.ac.uk` | [University of Cambridge Computer Science faculty directory](https://www.cst.cam.ac.uk/people/directory/faculty?lang=en) lists current faculty; the 2024–25 [department annual report](https://www.cst.cam.ac.uk/files/department-of-computer-science-and-technology-annual-report-2024-25.pdf) records the academic staff. |
+
+Coverage audit result: 42 of 45 configured countries now have at least one evidence-backed exact host. Holy See, Monaco, and San Marino remain uncovered because the official sources reviewed did not provide a relevant computer-science faculty/professor directory. No search was run to fill those gaps. Three Kyoto University hosts from the previous Japan run are confirmed above; the run record retained `www.kurims.kyoto-u.ac.jp`, `www.media.kyoto-u.ac.jp`, and `global.k.kyoto-u.ac.jp`, all previously rejected only because they were not yet allowlisted.
 
 ## Bounded Brave pilot
 
@@ -60,3 +104,36 @@ After per-result append-only recording was added, one capped-at-three Brave requ
 On 2026-10-30, the discovery pipeline made one Brave request with a maximum of three results for Japan and one for New Zealand. It combined only each country's reviewed exact hosts into one query. Japan returned three results from verified Kyoto University hosts; each official HTML page passed validation and was saved as an unverified, `needs-evidence` lead. New Zealand returned three results from `www.auckland.ac.nz`, which was not yet in its exact-host allowlist; all three were rejected by exact-host checks and none was saved. The original five leads were unchanged. All eight saved leads remain unverified and unapproved. Per-result host and outcome records are appended to the ignored JSONL diagnostics; no other country was searched.
 
 After verifying and adding the exact `www.auckland.ac.nz` hostname from University of Auckland pages, one NZ request with the same three-result cap returned three results from that host. All three official HTML pages passed validation and were saved as unverified, `needs-evidence` leads. The existing eight leads remained unchanged. All eleven leads remain unverified and unapproved; no other country was searched.
+
+## 2026-11-04 Japan bounded search
+
+One Brave request was made for the configured Japan target, with a maximum of three results and only the four exact Kyoto University hosts already recorded above. Three result items were returned; all three were rejected by exact-host validation before any official-page fetch. There were zero duplicates, saved leads, or official-page fetch failures. No new host was added. The existing 11 saved leads were not changed and remain unreviewed and unapproved. Sanitized host-only diagnostics were appended to the ignored local Phase 3 result log.
+
+## 2026-11-04 profile inspection and next-country batch
+
+The sandboxed read attempt stalled, so no provider request was made there. The authorized `npm run leads:inspect` then ran outside that network restriction. It read the saved profile and candidate list and inspected five existing allowlisted official sources. All five packages were marked uncertain because the fetched pages did not establish enough same-page evidence; zero matched the saved interests and six eligible leads remain pending. No retry occurred and no candidate, profile, or human decision changed.
+
+The subsequent profile-ordered discovery batch made five Brave requests, each capped at three results, across the first five saved countries with verified hosts. Three result items were returned; zero leads were saved, zero were duplicates, two were rejected, and one official-page fetch failed. Four requests failed with sanitized `http_status` and were not retried. No candidate or profile record changed. The batch used existing exact-host checks and the saved-interest match gate. Continue with the next configured countries in profile order; keep the three countries without verified hosts skipped.
+
+## 2026-11-07 Denmark diagnostics
+
+One approved Denmark request was capped at three results and used `orbit.dtu.dk`, the existing exact-host allowlist, duplicate checks, professor-profile extraction, and the saved-interest gate. All three official-page fetches failed, so no lead was saved; the saved pool remains 11. Two responses were HTTP 403: `/en/organisations/department-of-applied-mathematics-and-computer-science/publications/` and `/en/organisations/scientific-computing/activities/`. The third returned HTTP 301 and was rejected by the existing no-redirect policy. Its sanitized diagnostic did not retain either the requested resource path or the `Location` destination, so whether the redirect remained on the exact allowlisted host cannot be determined from saved artifacts. The 403s are server responses rather than evidence of a client bug; redirect behavior remains unchanged until its destination is known. No request was retried.
+
+The manual five-country batch accepts `--after <country>` and repeatable `--skip <country>` arguments to continue through the saved order while excluding countries with earlier recorded attempts. It retains one search per country and at most three results per search. The cursor only selects countries with existing reviewed exact hosts; uncovered countries remain skipped.
+
+
+The first attempt to continue after Denmark used `npm run discovery:batch -- --after Denmark`, but this PowerShell/npm invocation forwarded only the positional value `Denmark`. The runner therefore repeated the initial batch: Belgium, Bosnia and Herzegovina, Bulgaria, Croatia, and Czechia. It made five requests; four search requests (Bosnia and Herzegovina, Bulgaria, Croatia, and Czechia) returned sanitized HTTP 422, and the successful request returned three official-page fetch failures. It saved zero leads and changed no saved candidate records. This repeat was unintended and is recorded here; these five countries will not be retried in the current continuation. The CLI now rejects unknown positional arguments before connecting to MongoDB, and subsequent cursor batches use direct Node invocation so the `--after` flag is preserved. A repeatable `--skip <country>` option also excludes previously attempted countries that appear later in profile order.
+
+The owner then authorized discovery across the 26 remaining eligible countries. Direct Node batches attempted each once, in profile order, excluding all 16 previously attempted countries:
+
+| Batch | Requests | Search failures | Result items | Rejected | Page fetch failures | Saved / duplicates |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 (five countries) | 5 | 1 (HTTP 422) | 10 | 9 | 1 | 0 / 0 |
+| 2 (five countries) | 5 | 5 (HTTP 422) | 0 | 0 | 0 | 0 / 0 |
+| 3 (five countries) | 5 | 5 (HTTP 422) | 0 | 0 | 0 | 0 / 0 |
+| 4 (five countries) | 5 | 1 (HTTP 422) | 12 | 12 | 0 | 0 / 0 |
+| 5 (five countries) | 5 | 3 (HTTP 422) | 6 | 4 | 2 | 0 / 0 |
+| 6 (one country) | 1 | 0 | 3 | 3 | 0 | 0 / 0 |
+| **Total** | **26** | **15** | **31** | **28** | **3** | **0 / 0** |
+
+No candidates were added; the saved pool remains 11, with zero leads from these 26 countries. Fifteen search requests returned sanitized HTTP 422; their country-level records remain in the ignored local JSONL diagnostics. These batches initially lacked the result-diagnostic callback, so the 28 rejection and three page-fetch-failure totals are present in the batch outputs but their per-result HTTP/path metadata was not retained. The batch now forwards each result diagnostic to the sanitized recorder for future runs. No country was retried to reconstruct missing diagnostics. All 42 verified configured countries have now been attempted at least once; three configured countries remain skipped because no exact official host is documented.

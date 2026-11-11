@@ -104,6 +104,22 @@ test('compares annual tuition only when the profile has a matching budget and cu
   assert.match(differentCurrency.tuition.reasons.join(' '), /no exchange-rate conversion was inferred/i);
 });
 
+test('keeps GPA and tuition unknown when the profile omits its grading scale or annual budget', () => {
+  const incompleteProfile = structuredClone(profile);
+  incompleteProfile.applicant.degree.gpaScale = null;
+  incompleteProfile.applicant.target.maxAnnualTuition = null;
+  incompleteProfile.applicant.target.tuitionCurrency = '';
+
+  const result = assessProgram({
+    program: program(), profile: incompleteProfile, assessedAt: '2026-10-20T00:00:00.000Z',
+  });
+
+  assert.equal(result.admissions.outcome, 'unclear');
+  assert.match(result.admissions.reasons.join(' '), /GPA or grading scale is not provided/i);
+  assert.equal(result.tuition.outcome, 'unclear');
+  assert.match(result.tuition.reasons.join(' '), /annual budget or currency is not configured/i);
+});
+
 test('marks a known incompatible funding preference and passed deadline ineligible', () => {
   const result = assessProgram({
     program: program({

@@ -12,22 +12,41 @@
     "test:mongodb": "node --experimental-strip-types --import ./scripts/enable-mongodb-integration.ts --test test/mongo-storage.integration.test.ts",
     "test:watch": "node --experimental-strip-types --test --watch",
     "app": "node --experimental-strip-types src/interfaces/terminal-app.ts",
-    "dev": "next dev",
-    "web": "next dev",
-    "start": "next start",
+    "dev": "node --experimental-strip-types src/interfaces/web-server.ts --dev",
+    "web": "node --experimental-strip-types src/interfaces/web-server.ts --dev",
+    "start": "node --experimental-strip-types src/interfaces/web-server.ts",
     "leads:view": "node --experimental-strip-types src/interfaces/view-undecided-professor-leads.ts",
-    "discovery:pilot": "node --experimental-strip-types src/interfaces/discover-professor-candidates.ts",
+    "leads:inspect": "node --experimental-strip-types src/interfaces/inspect-saved-professor-leads.ts",
+    "leads:reprocess": "node --experimental-strip-types src/interfaces/reprocess-saved-professor-leads.ts",
+    "leads:reprocess:audit": "node --experimental-strip-types src/interfaces/audit-saved-lead-reprocessing.ts",
+    "discovery:batch": "node --experimental-strip-types src/interfaces/discover-professor-batch.ts",
+    "discovery:pilot": "node --experimental-strip-types src/interfaces/discover-professor-candidates.ts --region",
+    "discovery:preview:canada": "node --experimental-strip-types src/interfaces/discover-professor-preview.ts",
+    "discovery:preview:country": "node --experimental-strip-types src/interfaces/discover-professor-preview.ts",
+    "discovery:preview:continue": "node --experimental-strip-types src/interfaces/continue-discovery-previews.ts",
+    "discovery:preview:all": "node --experimental-strip-types src/interfaces/continue-discovery-previews.ts --all-countries",
+    "discovery:preview:canada:audit": "node --experimental-strip-types src/interfaces/diagnose-saved-preview-candidates.ts",
+    "discovery:preview:canada:reevaluate": "node --experimental-strip-types src/interfaces/reevaluate-saved-preview-evidence.ts",
+    "leads:review-preview:candidate-03": "node --experimental-strip-types src/interfaces/prepare-candidate-review-preview.ts",
+    "confirmed-professors:enrich": "node --experimental-strip-types src/interfaces/enrich-confirmed-professors.ts",
+    "leads:draft-preview:candidate-03": "node --experimental-strip-types src/interfaces/preview-candidate-03-draft.ts",
+    "discovery:preflight": "node --experimental-strip-types src/interfaces/discovery-preflight.ts",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && next build",
     "db:indexes": "node --experimental-strip-types src/infrastructure/create-indexes.ts",
     "db:migrate-discovery": "node --experimental-strip-types src/interfaces/migrate-discovery-collections.ts",
     "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts",
-    "outreach:scheduler": "node --experimental-strip-types src/interfaces/outreach-scheduler.ts"
+    "gmail:self-test": "node --experimental-strip-types src/interfaces/gmail-selftest.ts",
+    "outreach:scheduler": "node --experimental-strip-types src/interfaces/outreach-scheduler.ts",
+    "discovery:scheduler": "node --experimental-strip-types src/interfaces/discovery-scheduler.ts"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.15.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.8.3"
   },
   "dependencies": {
@@ -35,6 +54,8 @@
     "next": "^16.4.3",
     "next-auth": "^5.0.0-beta.32",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
   }
 }

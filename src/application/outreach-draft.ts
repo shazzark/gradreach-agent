@@ -1,6 +1,8 @@
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../domain/outreach-queue.ts';
 import { GeminiDraftProvider } from '../infrastructure/gemini-draft-provider.ts';
+import { OFFICIAL_HOSTS_BY_REGION } from '../config/official-host-allowlist.ts';
+import { matchingResearchInterests } from './professor-research-evidence.ts';
 
 export interface OutreachDraft {
   candidateId: string;
@@ -10,6 +12,17 @@ export interface OutreachDraft {
   personalizationSourceUrl: string;
   personalizationExcerpt: string;
   generatedAt: string;
+}
+
+export interface LocalOutreachDraftPreview extends Omit<OutreachDraft, 'recipientEmail'> {
+  recipientEmail: null;
+  recipientStatus: 'unavailable';
+  ownerDecision: 'accepted_local_only';
+  approved: false;
+  queued: false;
+  sent: false;
+  mongoWrites: 0;
+  claimSupport: Array<{ claim: string; evidence: string }>;
 }
 
 function cleanExcerpt(value: string): string {
@@ -25,6 +38,48 @@ function isSecureUrl(value: string): boolean {
     const url = new URL(value);
     return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
   } catch { return false; }
+}
+
+function matchingInterest(profile: ApplicantProfile, researchExcerpt: string): string {
+  const interests = [...profile.applicant.target.researchInterests, ...profile.applicant.target.fields].map((item) => item.trim()).filter(Boolean);
+  const matches = matchingResearchInterests(researchExcerpt, interests);
+  if (!matches.length) throw new Error('Research evidence must match at least one saved interest before drafting');
+  return cleanLine(matches[0]!);
+}
+
+function composeMessage(input: {
+  professorName: string;
+  institution: string;
+  profile: ApplicantProfile;
+  sourceUrl: string;
+  excerpt: string;
+  interest: string;
+}): { subject: string; body: string } {
+  const { profile } = input;
+  const degree = profile.applicant.degree;
+  const academicContext = degree.title.trim() && degree.institution.trim()
+    ? `My academic background is ${cleanLine(degree.title)} at ${cleanLine(degree.institution)}.\n\n`
+    : '';
+  const projectLinks = profile.applicant.documents.projectUrls.flatMap((value) => {
+    if (!isSecureUrl(value.trim())) return [];
+    return [new URL(value.trim()).toString()];
+  });
+  const projectContext = projectLinks.length ? `My project work is available here: ${projectLinks.slice(0, 3).join(', ')}.\n\n` : '';
+  const intake = profile.applicant.target.intake.trim();
+  const applicantName = cleanLine(profile.applicant.fullName);
+  const body = [
+    `Dear ${cleanLine(input.professorName)},`,
+    '',
+    `I am preparing to apply for the ${cleanLine(intake) || 'upcoming'} master's intake and am interested in ${cleanLine(input.institution)}. Your profile says: "${input.excerpt}" This connects with my interest in ${input.interest}.`,
+    '',
+    `${academicContext}${projectContext}Would you be open to discussing whether your group may be a fit for an incoming master's student?`,
+    '',
+    'Thank you for your time,',
+    applicantName,
+    '',
+    `Source: ${input.sourceUrl}`,
+  ].join('\n');
+  return { subject: `Prospective master's applicant interested in ${input.interest}`, body };
 }
 
 /** Builds a source-cited draft from a human-selected reviewed fact; it never approves or sends it. */
@@ -54,42 +109,82 @@ export function createOutreachDraft(input: {
   if (selectedExcerpt.length < 24 || selectedExcerpt.length > 240 || !officialExcerpt.includes(selectedExcerpt)) {
     throw new Error('Personalization excerpt must be a short exact passage from the reviewed source');
   }
-  const interests = [...profile.applicant.target.researchInterests, ...profile.applicant.target.fields].map((item) => item.trim()).filter(Boolean);
-  const interest = interests[0] ? cleanLine(interests[0]) : undefined;
+  const interest = matchingInterest(profile, selectedExcerpt);
   const applicantName = cleanLine(profile.applicant.fullName);
-  if (!applicantName || !interest) throw new Error('Applicant name and at least one configured academic interest are required');
-  const degree = profile.applicant.degree;
-  const academicContext = degree.title.trim() && degree.institution.trim()
-    ? `My academic background is ${cleanLine(degree.title)} at ${cleanLine(degree.institution)}.\n\n`
-    : '';
-  const projectLinks = profile.applicant.documents.projectUrls.flatMap((value) => {
-    if (!isSecureUrl(value.trim())) return [];
-    return [new URL(value.trim()).toString()];
-  });
-  const projectContext = projectLinks.length ? `My project work is available here: ${projectLinks.slice(0, 3).join(', ')}.\n\n` : '';
-  const intake = profile.applicant.target.intake.trim();
-  const body = [
-    `Dear ${professorName},`,
-    '',
-    `I am preparing to apply for the ${cleanLine(intake) || 'upcoming'} master's intake and am interested in ${institution}. Your profile says: "${selectedExcerpt}" This connects with my interest in ${interest}.`,
-    '',
-    `${academicContext}${projectContext}Would you be open to discussing whether your group may be a fit for an incoming master's student?`,
-    '',
-    'Thank you for your time,',
-    applicantName,
-    '',
-    `Source: ${source.sourceUrl}`,
-  ].join('\n');
+  if (!applicantName) throw new Error('Applicant name and at least one configured academic interest are required');
+  const message = composeMessage({ professorName, institution, profile, sourceUrl: source.sourceUrl, excerpt: selectedExcerpt, interest });
   const generatedAt = new Date(input.now ?? new Date().toISOString());
   if (Number.isNaN(generatedAt.getTime())) throw new Error('now must be a valid date');
   return {
     candidateId: candidate.id,
     recipientEmail: candidate.officialEmail,
-    subject: `Prospective master's applicant interested in ${interest}`,
-    body,
+    ...message,
     personalizationSourceUrl: source.sourceUrl,
     personalizationExcerpt: selectedExcerpt,
     generatedAt: generatedAt.toISOString(),
+  };
+}
+
+/** Creates a private draft preview only from an accepted local decision and reverified report evidence. */
+export function createLocalAcceptedOutreachDraftPreview(input: {
+  candidateId: string;
+  professorName: string;
+  institution: string;
+  country: string;
+  officialProfileUrl: string;
+  researchSourceUrl: string;
+  researchExcerpt: string;
+  profile: ApplicantProfile;
+  ownerDecision: { decision: 'accepted'; scope: 'local_preview_only'; mongoSaved: false };
+  identityEstablished: true;
+  researchMatchEstablished: true;
+  now?: string;
+}): LocalOutreachDraftPreview {
+  if (input.ownerDecision.decision !== 'accepted' || input.ownerDecision.scope !== 'local_preview_only' || input.ownerDecision.mongoSaved !== false ||
+      input.identityEstablished !== true || input.researchMatchEstablished !== true) {
+    throw new Error('Accepted local identity and research evidence are required for a draft preview');
+  }
+  const hosts = (OFFICIAL_HOSTS_BY_REGION as Record<string, readonly string[]>)[input.country] ?? [];
+  for (const value of [input.officialProfileUrl, input.researchSourceUrl]) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password || !hosts.includes(url.hostname.toLowerCase())) throw new Error('not official');
+    } catch { throw new Error('Official profile and research evidence sources are required'); }
+  }
+  const excerpt = cleanExcerpt(input.researchExcerpt);
+  if (excerpt.length < 24 || excerpt.length > 240) throw new Error('Personalization excerpt must be a short exact passage from the saved official evidence');
+  const interest = matchingInterest(input.profile, excerpt);
+  const generatedAt = new Date(input.now ?? new Date().toISOString());
+  if (Number.isNaN(generatedAt.getTime())) throw new Error('now must be a valid date');
+  const message = composeMessage({
+    professorName: input.professorName, institution: input.institution, profile: input.profile,
+    sourceUrl: input.researchSourceUrl, excerpt, interest,
+  });
+  return {
+    candidateId: input.candidateId,
+    recipientEmail: null,
+    recipientStatus: 'unavailable',
+    ...message,
+    personalizationSourceUrl: input.researchSourceUrl,
+    personalizationExcerpt: excerpt,
+    generatedAt: generatedAt.toISOString(),
+    ownerDecision: 'accepted_local_only',
+    approved: false,
+    queued: false,
+    sent: false,
+    mongoWrites: 0,
+    claimSupport: [
+      { claim: 'Professor name and academic role', evidence: 'Accepted local report identity fields and identity-established official-page diagnostic.' },
+      { claim: 'Institution affiliation', evidence: 'Official institution profile URL and accepted local report institution field.' },
+      { claim: 'Quoted research statement', evidence: `Official research evidence at ${input.researchSourceUrl}.` },
+      { claim: 'Research-interest connection', evidence: 'Current saved research interests were matched against the quoted official research evidence.' },
+      ...(input.profile.applicant.degree.title.trim() && input.profile.applicant.degree.institution.trim()
+        ? [{ claim: 'Applicant academic background', evidence: 'Saved primary profile degree title and institution fields; owner-provided, not independently source-verified.' }] : []),
+      ...(input.profile.applicant.target.intake.trim()
+        ? [{ claim: 'Applicant intended intake', evidence: 'Saved primary profile intake field.' }] : []),
+      ...(input.profile.applicant.documents.projectUrls.some((value) => isSecureUrl(value.trim()))
+        ? [{ claim: 'Applicant project link availability', evidence: 'Saved primary profile project URL fields.' }] : []),
+    ],
   };
 }
 
@@ -127,7 +222,7 @@ export async function createGeminiOutreachDraft(input: {
   now?: string;
 }): Promise<OutreachDraft> {
   const base = createOutreachDraft(input);
-  const interest = [...input.profile.applicant.target.researchInterests, ...input.profile.applicant.target.fields].map((item) => item.trim()).find(Boolean)!;
+  const interest = matchingInterest(input.profile, base.personalizationExcerpt);
   const generated = await (input.provider ?? new GeminiDraftProvider()).generate({
     applicantName: input.profile.applicant.fullName,
     academicBackground: [input.profile.applicant.degree.title, input.profile.applicant.degree.institution].filter(Boolean).join(' at ') || 'Not provided',

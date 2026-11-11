@@ -1,17 +1,17 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { stdout } from 'node:process';
-import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
+import { connectMongoStorage, type ConnectedMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { GmailDeliveryService } from '../infrastructure/gmail-oauth.ts';
 
 const POLL_INTERVAL_MS = 60_000;
 
-export async function runOutreachScheduler(): Promise<void> {
+export async function runOutreachScheduler(connect: () => Promise<ConnectedMongoStorage> = connectMongoStorage): Promise<void> {
   if (process.env.OUTREACH_SENDING_ENABLED !== 'true') {
     stdout.write('Outreach delivery is disabled. Set OUTREACH_SENDING_ENABLED=true only after account authorization and owner review.\n');
     return;
   }
-  const storage = await connectMongoStorage();
+  const storage = await connect();
   const delivery = new GmailDeliveryService({ repositories: storage.repositories });
   let stop = false;
   let wake!: () => void;

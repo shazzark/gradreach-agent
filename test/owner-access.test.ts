@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canStartGoogleSignIn, GOOGLE_SIGN_IN_SCOPES, isAllowedGoogleSignIn, isOwnerSession, isVerifiedGoogleOwner } from '../src/web/owner-access.ts';
+import { canStartGoogleSignIn, DEFAULT_WORKSPACE_PATH, GOOGLE_SIGN_IN_SCOPES, isAllowedGoogleSignIn, isOwnerSession, isPublicWebsitePath, isVerifiedGoogleOwner, safeWorkspaceReturnPath } from '../src/web/owner-access.ts';
 import { safeOfficialSourceUrl } from '../src/web/safe-source-url.ts';
 
 const ownerEmail = 'owner@example.com';
@@ -23,6 +23,27 @@ test('owner sessions fail closed when the configured owner email is missing or d
   assert.equal(isOwnerSession({ user: { email: ownerEmail, isOwner: false } }, ownerEmail), false);
   assert.equal(isOwnerSession(ownerSession, undefined), false);
   assert.equal(isOwnerSession(ownerSession, 'not-an-email'), false);
+});
+
+test('only the welcome, sign-in, and Auth.js endpoints are public', () => {
+  assert.equal(isPublicWebsitePath('/'), true);
+  assert.equal(isPublicWebsitePath('/sign-in'), true);
+  assert.equal(isPublicWebsitePath('/icon.svg'), true);
+  assert.equal(isPublicWebsitePath('/apple-icon'), true);
+  assert.equal(isPublicWebsitePath('/manifest.webmanifest'), true);
+  assert.equal(isPublicWebsitePath('/api/auth/callback/google'), true);
+  assert.equal(isPublicWebsitePath('/workspace'), false);
+  assert.equal(isPublicWebsitePath('/leads'), false);
+  assert.equal(isPublicWebsitePath('/api/private-data'), false);
+});
+
+test('sign-in return path preserves protected destinations without allowing external redirects', () => {
+  assert.equal(safeWorkspaceReturnPath('https://gradreach.example/leads?region=Korea'), '/leads?region=Korea');
+  assert.equal(safeWorkspaceReturnPath('/programs?state=review'), '/programs?state=review');
+  assert.equal(safeWorkspaceReturnPath('https://attacker.example/steal'), '/steal');
+  assert.equal(safeWorkspaceReturnPath('//attacker.example/steal'), DEFAULT_WORKSPACE_PATH);
+  assert.equal(safeWorkspaceReturnPath('javascript:alert(1)'), DEFAULT_WORKSPACE_PATH);
+  assert.equal(safeWorkspaceReturnPath('/sign-in?callbackUrl=/leads'), DEFAULT_WORKSPACE_PATH);
 });
 
 test('Google sign-in is unavailable unless owner, provider credentials, and session secret exist', () => {

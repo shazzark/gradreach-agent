@@ -44,6 +44,25 @@ test('Gmail OAuth asks for send-only scope and stores callback tokens with owner
   }
 });
 
+test('Gmail OAuth refuses to save an access-only token that cannot support scheduled delivery', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-no-refresh-'));
+  const tokenPath = join(folder, 'tokens.json');
+  try {
+    const flow = await beginGmailAuthorization({
+      clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret', tokenPath,
+      fetchImpl: async () => Response.json({ access_token: 'synthetic-access-token', expires_in: 3600, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer' }),
+    });
+    try {
+      const url = new URL(flow.authorizationUrl);
+      const redirect = new URL(url.searchParams.get('redirect_uri')!);
+      const completionFailure = assert.rejects(flow.complete, /send-only scope.*refresh capability/);
+      await fetch(`${redirect.origin}/oauth2callback?code=synthetic-code&state=${url.searchParams.get('state')}`);
+      await completionFailure;
+      await assert.rejects(readFile(tokenPath), { code: 'ENOENT' });
+    } finally { await flow.close(); }
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
 test('Gmail OAuth rejects and does not store an expanded scope set', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-scope-'));
   const tokenPath = join(folder, 'tokens.json');

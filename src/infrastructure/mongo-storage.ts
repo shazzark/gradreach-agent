@@ -3,8 +3,11 @@ import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { CandidateEvidenceTriage, OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../domain/program-assessment.ts';
+import type { DiscoveryEvidenceCheck, DiscoveryRun, DiscoverySchedule } from '../application/automatic-discovery.ts';
+import { MAX_SAVED_LEADS_PER_REPROCESS_RUN, type SavedLeadReprocessResult, type SavedLeadReprocessRun } from '../domain/saved-lead-reprocessing.ts';
 import { getLocalDateKey } from '../domain/outreach-queue.ts';
 import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
+import type { ConfirmedProfessor } from '../application/confirmed-professors.ts';
 
 interface StoredProfile extends Document {
   _id: string;
@@ -16,6 +19,7 @@ interface StoredCandidate extends Document {
   _id: string;
   candidate: ProfessorCandidate;
   normalizedEmail?: string;
+  lastReprocessedRunId?: string;
   updatedAt: Date;
 }
 
@@ -47,6 +51,117 @@ interface StoredSchedulerControl extends Document {
   _id: 'daily-scheduler';
   control: SchedulerControl;
   updatedAt: Date;
+}
+
+interface StoredDiscoverySchedule extends Document { _id: 'automatic-discovery'; schedule: DiscoverySchedule; updatedAt: Date; }
+interface StoredDiscoveryRun extends Document { _id: string; run: DiscoveryRun; updatedAt: Date; }
+interface StoredDiscoveryCheck extends Document { _id: string; check: DiscoveryEvidenceCheck; updatedAt: Date; }
+interface StoredSavedLeadReprocessRun extends Document { _id: string; run: SavedLeadReprocessRun; updatedAt: Date; }
+interface StoredConfirmedProfessor extends Document {
+  _id: string;
+  stableId: string;
+  canonicalProfileUrl: string;
+  normalizedIdentity: string;
+  professor: Omit<ConfirmedProfessor, 'localOwnerDecision' | 'approved' | 'queued' | 'sent'>;
+  researchOutcome?: 'matched' | 'evidence_found_no_match' | 'no_research_evidence' | 'fetch_failed' | 'not_evaluated';
+  ownerDecision: 'pending' | 'accepted' | 'rejected';
+  approved: boolean;
+  queued: boolean;
+  sent: boolean;
+  updatedAt: Date;
+}
+
+export class ConfirmedProfessorRepository {
+  private readonly collection: Collection<StoredConfirmedProfessor>;
+  constructor(collection: Collection<StoredConfirmedProfessor>) { this.collection = collection; }
+  async upsert(professor: ConfirmedProfessor & { researchOutcome?: StoredConfirmedProfessor['researchOutcome'] }): Promise<'inserted' | 'updated'> {
+    const profile = new URL(professor.officialProfileUrl);
+    profile.search = ''; profile.hash = '';
+    const canonicalProfileUrl = profile.toString();
+    const normalizedIdentity = `${professor.name.toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}|${professor.institution.toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}`;
+    const existing = await this.collection.findOne({ $or: [{ _id: professor.stableId }, { canonicalProfileUrl }, { normalizedIdentity }] }, { projection: { _id: 1, ownerDecision: 1 } });
+    const id = existing?._id ?? professor.stableId;
+    const persisted = { ...professor, stableId: existing?.stableId ?? professor.stableId };
+    delete (persisted as Partial<ConfirmedProfessor>).localOwnerDecision;
+    delete (persisted as Partial<ConfirmedProfessor>).approved;
+    delete (persisted as Partial<ConfirmedProfessor>).queued;
+    delete (persisted as Partial<ConfirmedProfessor>).sent;
+    const setValues: Record<string, unknown> = { stableId: existing?.stableId ?? professor.stableId, canonicalProfileUrl, normalizedIdentity, professor: persisted, updatedAt: new Date() };
+    if (existing?.ownerDecision === 'pending' && professor.localOwnerDecision === 'accepted_local_only') setValues.ownerDecision = 'accepted';
+    const setOnInsert: Record<string, unknown> = { _id: id, approved: false, queued: false, sent: false };
+    if (!existing) setOnInsert.ownerDecision = professor.localOwnerDecision === 'accepted_local_only' ? 'accepted' : 'pending';
+    const update = {
+      $set: { ...setValues, ...(professor.researchOutcome ? { researchOutcome: professor.researchOutcome } : {}) },
+      $setOnInsert: setOnInsert,
+    };
+    const result = await this.collection.updateOne({ _id: id }, update as never, { upsert: !existing });
+    return result.upsertedCount ? 'inserted' : 'updated';
+  }
+}
+
+export class SavedLeadReprocessRunRepository {
+  private readonly collection: Collection<StoredSavedLeadReprocessRun>;
+  constructor(collection: Collection<StoredSavedLeadReprocessRun>) { this.collection = collection; }
+  async start(run: SavedLeadReprocessRun): Promise<void> {
+    await this.collection.insertOne({ _id: run.id, run, updatedAt: new Date() });
+  }
+  async recordResult(runId: string, result: SavedLeadReprocessResult): Promise<boolean> {
+    const updated = await this.collection.updateOne(
+      {
+        _id: runId, 'run.state': 'running', 'run.results.candidateId': { $ne: result.candidateId },
+        $expr: { $lt: [{ $size: '$run.results' }, MAX_SAVED_LEADS_PER_REPROCESS_RUN] },
+      },
+      { $push: { 'run.results': result }, $set: { updatedAt: new Date() } } as never,
+    );
+    if (updated.modifiedCount === 1) return true;
+    const existing = await this.collection.findOne({ _id: runId, 'run.results.candidateId': result.candidateId }, { projection: { _id: 1 } });
+    return Boolean(existing);
+  }
+  async finish(run: SavedLeadReprocessRun): Promise<void> {
+    await this.collection.updateOne({ _id: run.id }, { $set: { run, updatedAt: new Date() } });
+  }
+  async get(runId: string): Promise<SavedLeadReprocessRun | undefined> {
+    return (await this.collection.findOne({ _id: runId }, { projection: { run: 1 } }))?.run;
+  }
+  async list(limit = 20): Promise<SavedLeadReprocessRun[]> {
+    return (await this.collection.find().sort({ 'run.startedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((record) => record.run);
+  }
+}
+
+export class AutomaticDiscoveryScheduleRepository {
+  private readonly collection: Collection<StoredDiscoverySchedule>;
+  constructor(collection: Collection<StoredDiscoverySchedule>) { this.collection = collection; }
+  async get(): Promise<DiscoverySchedule | undefined> { return (await this.collection.findOne({ _id: 'automatic-discovery' }))?.schedule; }
+  async save(schedule: DiscoverySchedule): Promise<void> {
+    await this.collection.updateOne({ _id: 'automatic-discovery' }, { $set: { schedule, updatedAt: new Date() }, $setOnInsert: { _id: 'automatic-discovery' } }, { upsert: true });
+  }
+}
+
+export class AutomaticDiscoveryRunRepository {
+  private readonly collection: Collection<StoredDiscoveryRun>;
+  constructor(collection: Collection<StoredDiscoveryRun>) { this.collection = collection; }
+  async list(limit: number): Promise<DiscoveryRun[]> {
+    return (await this.collection.find().sort({ 'run.startedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((item) => item.run);
+  }
+  async claim(run: DiscoveryRun): Promise<boolean> {
+    try { await this.collection.insertOne({ _id: run.id, run, updatedAt: new Date() }); return true; }
+    catch (error) { if (typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) return false; throw error; }
+  }
+  async finish(run: DiscoveryRun): Promise<void> {
+    await this.collection.updateOne({ _id: run.id, 'run.state': 'running' }, { $set: { run, updatedAt: new Date() } });
+  }
+}
+
+export class AutomaticDiscoveryEvidenceCheckRepository {
+  private readonly collection: Collection<StoredDiscoveryCheck>;
+  constructor(collection: Collection<StoredDiscoveryCheck>) { this.collection = collection; }
+  async has(candidateId: string, runId: string): Promise<boolean> { return Boolean(await this.collection.findOne({ _id: `${runId}:${candidateId}` }, { projection: { _id: 1 } })); }
+  async save(check: DiscoveryEvidenceCheck): Promise<void> {
+    await this.collection.updateOne({ _id: check.id }, { $setOnInsert: { _id: check.id, check, updatedAt: new Date() } }, { upsert: true });
+  }
+  async list(limit = 100): Promise<DiscoveryEvidenceCheck[]> {
+    return (await this.collection.find().sort({ 'check.checkedAt': -1 }).limit(Math.max(1, Math.min(100, limit))).toArray()).map((item) => item.check);
+  }
 }
 
 export class ApplicantProfileRepository {
@@ -93,6 +208,11 @@ export class ProfessorCandidateRepository {
     return documents.map((document) => document.candidate);
   }
 
+  /** Returns only stable IDs marked by a run, for reconciling a write before its outcome record. */
+  async listReprocessedLeadIds(runId: string): Promise<string[]> {
+    return (await this.collection.find({ lastReprocessedRunId: runId }, { projection: { _id: 1 } }).toArray()).map(({ _id }) => String(_id));
+  }
+
   async save(candidate: ProfessorCandidate): Promise<void> {
     const email = candidate.officialEmail?.trim().toLowerCase();
     const document: StoredCandidate = {
@@ -102,6 +222,43 @@ export class ProfessorCandidateRepository {
       ...(email ? { normalizedEmail: email } : {}),
     };
     await this.collection.replaceOne({ _id: candidate.id }, document, { upsert: true });
+  }
+
+  /** Adds newly validated discovery evidence without replacing review, approval, or outreach fields. */
+  async appendValidatedResearchEvidence(input: {
+    candidateId: string;
+    expectedOfficialProfileUrl?: string;
+    expectedProfessorName?: string;
+    officialProfileUrl: string;
+    professorName: string;
+    leadName: string;
+    runId: string;
+    evidence: NonNullable<ProfessorCandidate['discoveryEvidence']>;
+  }): Promise<boolean> {
+    const filter: Record<string, unknown> = {
+      _id: input.candidateId,
+      'candidate.status': { $in: ['researching', 'needs-evidence', 'ready-for-review'] },
+      'candidate.approvedForSending': { $ne: true },
+      'candidate.discoveryReview': { $exists: false },
+      ...(input.expectedOfficialProfileUrl === undefined
+        ? { 'candidate.officialProfileUrl': { $exists: false } }
+        : { 'candidate.officialProfileUrl': input.expectedOfficialProfileUrl }),
+      ...(input.expectedProfessorName === undefined
+        ? { 'candidate.professorName': { $exists: false } }
+        : { 'candidate.professorName': input.expectedProfessorName }),
+    };
+    const result = await this.collection.updateOne(filter, {
+      $set: {
+        'candidate.name': input.leadName,
+        'candidate.professorName': input.professorName,
+        'candidate.leadType': 'professor_profile',
+        'candidate.officialProfileUrl': input.officialProfileUrl,
+        lastReprocessedRunId: input.runId,
+        updatedAt: new Date(),
+      },
+      $addToSet: { 'candidate.discoveryEvidence': { $each: input.evidence } },
+    });
+    return result.modifiedCount === 1;
   }
 
   async delete(candidateId: string): Promise<boolean> {
@@ -370,6 +527,11 @@ export interface GradReachRepositories {
   programs: ProgramRepository;
   assessments: ProgramAssessmentRepository;
   schedulerControl: SchedulerControlRepository;
+  discoverySchedule: AutomaticDiscoveryScheduleRepository;
+  discoveryRuns: AutomaticDiscoveryRunRepository;
+  discoveryChecks: AutomaticDiscoveryEvidenceCheckRepository;
+  savedLeadReprocessRuns: SavedLeadReprocessRunRepository;
+  confirmedProfessors: ConfirmedProfessorRepository;
 }
 
 /** Creates repositories without creating indexes as a side effect of application startup. */
@@ -382,6 +544,11 @@ export function createRepositories(db: Db): GradReachRepositories {
     programs: new ProgramRepository(db.collection<StoredProgram>('programs')),
     assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
     schedulerControl: new SchedulerControlRepository(db.collection<StoredSchedulerControl>('outreach_control')),
+    discoverySchedule: new AutomaticDiscoveryScheduleRepository(db.collection<StoredDiscoverySchedule>('discovery_schedule')),
+    discoveryRuns: new AutomaticDiscoveryRunRepository(db.collection<StoredDiscoveryRun>('discovery_job_runs')),
+    discoveryChecks: new AutomaticDiscoveryEvidenceCheckRepository(db.collection<StoredDiscoveryCheck>('discovery_evidence_checks')),
+    savedLeadReprocessRuns: new SavedLeadReprocessRunRepository(db.collection<StoredSavedLeadReprocessRun>('saved_lead_reprocess_runs')),
+    confirmedProfessors: new ConfirmedProfessorRepository(db.collection<StoredConfirmedProfessor>('confirmed_professors')),
   };
 }
 

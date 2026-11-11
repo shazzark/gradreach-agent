@@ -1,9 +1,9 @@
 'use server';
 
 import { signIn } from '../../auth.ts';
-import { canStartGoogleSignIn } from '../../src/web/owner-access.ts';
+import { canStartGoogleSignIn, safeWorkspaceReturnPath } from '../../src/web/owner-access.ts';
 
-export async function startGoogleSignIn(): Promise<void> {
+export async function startGoogleSignIn(form: FormData): Promise<void> {
   if (!canStartGoogleSignIn({
     ownerEmail: process.env.GRADREACH_OWNER_EMAIL,
     googleClientId: process.env.AUTH_GOOGLE_ID,
@@ -11,5 +11,5 @@ export async function startGoogleSignIn(): Promise<void> {
     authSecret: process.env.AUTH_SECRET,
     trustHost: process.env.AUTH_TRUST_HOST,
   })) throw new Error('Private website sign-in is not configured');
-  await signIn('google', { redirectTo: '/' });
+  await signIn('google', { redirectTo: safeWorkspaceReturnPath(form.get('callbackUrl')) });
 }

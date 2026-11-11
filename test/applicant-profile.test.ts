@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
+import { createEmptyApplicantProfile, isApplicantProfileIncomplete, parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import { loadApplicantProfile } from '../src/infrastructure/local-profile.ts';
 
 const examplePath = fileURLToPath(new URL('../private.profile.example.json', import.meta.url));
@@ -17,6 +17,19 @@ test('parses the blank example profile without requiring private applicant detai
   assert.equal(profile.applicant.target.degreeLevel, 'masters');
   assert.equal(profile.applicant.target.timezone, 'Africa/Lagos');
   assert.deepEqual(profile.applicant.target.fundingTypes, ['scholarship', 'low-tuition']);
+});
+
+test('normalizes a missing or incomplete saved profile without requiring optional personal details', () => {
+  const profile = parseApplicantProfile({ applicant: { degree: { title: 'BSc Computer Science' } } });
+  assert.equal(profile.applicant.degree.title, 'BSc Computer Science');
+  assert.equal(profile.applicant.phone, '');
+  assert.equal(profile.applicant.email, '');
+  assert.equal(profile.applicant.degree.gpaScale, null);
+  assert.equal(profile.applicant.englishEvidence.testName, '');
+  assert.equal(profile.applicant.documents.transcriptPath, '');
+  assert.deepEqual(profile.applicant.documents.projectUrls, []);
+  assert.equal(isApplicantProfileIncomplete(profile), true);
+  assert.equal(isApplicantProfileIncomplete(createEmptyApplicantProfile()), true);
 });
 
 test('loads and validates a profile from a local JSON path', async () => {
