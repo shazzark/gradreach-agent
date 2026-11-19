@@ -17,7 +17,7 @@ or applicant data. Keep it that way.
 | Batch | 1 — R1, R2, R3, R9 |
 | Skills applied | `engineering-workflow`, `git-engineering` (global, unmodified) |
 | Verification | `npm run typecheck` exit 0 · `npm test` exit 0 (290 tests, 289 pass, 0 fail, 1 opt-in skip) · `npm run build` exit 0 |
-| Remote state | Push authorized by the Batch 1 instruction; `git push origin main` is the final step of this batch |
+| Remote state | Pushed: `origin/main` matches the head of this batch (see `git log origin/main -3`) |
 
 ## Phase log
 
@@ -30,7 +30,8 @@ or applicant data. Keep it that way.
 | 4 | R3 (A-04) | `9a34787` | README status rewritten with durable facts only |
 | 5 | R9 (A-11) | `74e3029` | Daily-limit constants + validator centralized in the domain layer |
 | 6 | Verification | — | Typecheck, full suite and production build all exit 0 |
-| 7 | Log + push | _this commit_ | Hand-off log committed; push is the final action |
+| 7 | Log + push | `c2e9dcd` | Hand-off log committed and pushed |
+| 8 | Privacy sweep | `7d25f13` | Literal address redacted from `AUDIT.md`; history exposure documented |
 
 ## What changed, precisely
 
