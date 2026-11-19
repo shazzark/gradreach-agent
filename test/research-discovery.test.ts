@@ -358,7 +358,7 @@ test('Brave adapter authenticates, requests a bounded result count, and filters 
   assert.equal(parsedUrl.searchParams.get('count'), '20');
   assert.equal(parsedUrl.searchParams.get('country'), 'GB');
   assert.equal(requestHeaders?.get('X-Subscription-Token'), 'synthetic-token');
-  assert.deepEqual(results, [{ title: 'Official result', url: 'https://university.example.edu/professor', excerpt: 'Synthetic snippet.', resultNumber: 1 }]);
+  assert.deepEqual(results, [{ provider: 'brave', title: 'Official result', url: 'https://university.example.edu/professor', snippet: 'Synthetic snippet.', excerpt: 'Synthetic snippet.', resultNumber: 1 }]);
   assert.deepEqual(rejectedChecks, [
     { exactHost: true, title: false, excerpt: false, hostname: 'university.example.edu' },
     { exactHost: false, title: false, excerpt: true, hostname: 'university.example.edu' },

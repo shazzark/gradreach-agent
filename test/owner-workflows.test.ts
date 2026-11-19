@@ -46,7 +46,7 @@ function repositories(input: {
       async record(value: OutreachAttempt) { input.savedAttempts = [...(input.savedAttempts ?? []), value]; },
       async recordManualOutcome(value: unknown) { input.savedOutcome = value; return true; },
     } as never,
-    programs: {
+    opportunities: {
       async get(id: string) { return input.program?.id === id ? input.program : undefined; },
       async save(value: ProgramRecord) { input.savedProgram = value; return { id: value.id, duplicate: false }; },
       async list() { return input.program ? [input.program] : []; },
@@ -177,9 +177,9 @@ test('program workflow validates imported evidence and leaves assessment until o
 test('opportunity review requires certain official evidence and records owner decisions', async () => {
   let status = '';
   const source = { sourceUrl: 'https://company.example/jobs/graduate', checkedAt: '2026-11-01T00:00:00Z', excerpt: 'Graduate role details.', uncertainty: '', verification: 'reviewed' as const };
-  const program = { id: 'company-1', kind: 'company_graduate_program' as const, institution: 'Example Tech', name: 'Graduate role', country: 'Exampleland', intake: '', sourceEvidence: source, lastCheckedAt: source.checkedAt, reviewStatus: 'pending' as const };
+  const program = { id: 'company-1', type: 'company_graduate_program' as const, institution: 'Example Tech', name: 'Graduate role', country: 'Exampleland', intake: '', sourceEvidence: source, lastCheckedAt: source.checkedAt, eligibilityStatus: 'unclear' as const, reviewStatus: 'pending' as const };
   const repos = {
-    programs: {
+    opportunities: {
       async get() { return program; },
       async save(value: ProgramRecord) { return { id: value.id, duplicate: false }; },
       async setReviewStatus(_id: string, value: string) { status = value; return true; },
@@ -189,7 +189,7 @@ test('opportunity review requires certain official evidence and records owner de
   assert.equal(status, 'approved');
   status = '';
   await assert.rejects(reviewProgramOpportunity({
-    repositories: { programs: { async get() { return { ...program, sourceEvidence: { ...source, uncertainty: 'Location is not confirmed.' } }; }, async setReviewStatus() { status = 'approved'; return true; } } } as unknown as GradReachRepositories,
+    repositories: { opportunities: { async get() { return { ...program, sourceEvidence: { ...source, uncertainty: 'Location is not confirmed.' } }; }, async setReviewStatus() { status = 'approved'; return true; } } } as unknown as GradReachRepositories,
     programId: 'company-1', decision: 'approved',
   }), /evidence is missing or uncertain/);
   assert.equal(status, '');
@@ -199,7 +199,7 @@ test('duplicate opportunity imports do not create a second assessment', async ()
   let assessments = 0;
   const sourceEvidence = { sourceUrl: 'https://scholarship.example/award', checkedAt: '2026-11-01T00:00:00Z', excerpt: 'Official award page.', uncertainty: '', verification: 'reviewed' as const };
   const repositories = {
-    programs: { async save() { return { id: 'existing-award', duplicate: true }; } },
+    opportunities: { async save() { return { id: 'existing-award', duplicate: true }; } },
     assessments: { async save() { assessments++; } },
   } as unknown as GradReachRepositories;
   const result = await importAndAssessProgram({ repositories, profile, program: {

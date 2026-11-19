@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { assessOpportunityFit, assessProgram, parseProgramRecord, type OfficialEvidence, type ProgramRecord } from '../src/domain/program-assessment.ts';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
-import { ProgramRepository } from '../src/infrastructure/mongo-storage.ts';
+import { OpportunityRepository } from '../src/infrastructure/mongo-storage.ts';
 
 const profile = parseApplicantProfile(JSON.parse(await readFile(new URL('../private.profile.example.json', import.meta.url), 'utf8')));
 profile.applicant.degree.classification = 'Second Class Lower (2:2)';
@@ -158,8 +158,9 @@ test('source-backed scholarship and company opportunities stay distinct, pending
     id: 'company-1', kind: 'company_graduate_program', institution: 'Example Tech', name: 'Graduate Engineer Programme', country: 'Exampleland', intake: '',
     field: 'computer science', sourceEvidence: { ...evidence, excerpt: 'Official source for a graduate opportunity in distributed systems.' }, compensation: { summary: 'Salary range published in the official listing.', evidence },
   });
-  assert.equal(scholarship.kind, 'scholarship');
-  assert.equal(company.kind, 'company_graduate_program');
+  assert.equal(scholarship.type, 'scholarship');
+  assert.equal(company.type, 'company_graduate_program');
+  assert.equal(scholarship.eligibilityStatus, 'unclear');
   assert.equal(scholarship.reviewStatus, 'pending');
   assert.equal(company.reviewStatus, 'pending');
   assert.equal(company.lastCheckedAt, evidence.checkedAt);
@@ -175,9 +176,9 @@ test('source-backed scholarship and company opportunities stay distinct, pending
 
 test('opportunity repository deduplicates canonical official sources before writing', async () => {
   let replaced = false;
-  const repository = new ProgramRepository({
+  const repository = new OpportunityRepository({
     find() {
-      return { project() { return { async toArray() { return [{ _id: 'existing', program: { sourceEvidence: { sourceUrl: 'https://company.example/jobs/graduate' } } }]; } }; } };
+      return { project() { return { limit() { return { async toArray() { return [{ _id: 'existing', opportunity: { id: 'existing', type: 'company_graduate_program', institution: 'Example Tech', name: 'Graduate role', country: 'Exampleland', intake: '', sourceEvidence: { ...evidence, sourceUrl: 'https://company.example/jobs/graduate' } } }]; } }; } }; } };
     },
     async replaceOne() { replaced = true; },
   } as never);

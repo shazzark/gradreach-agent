@@ -21,7 +21,7 @@ function harness(provider: SearchProvider) {
       async recordSource() {},
       async finish(run: OpportunityDiscoveryRun) { claimed = structuredClone(run); return true; },
     },
-    programs: { async saveDiscovered(program: unknown) { records.push(program); writes++; return { id: `saved-${writes}`, duplicate: false }; } },
+    opportunities: { async saveDiscovered(program: unknown) { records.push(program); writes++; return { id: `saved-${writes}`, duplicate: false }; } },
   };
   return { repositories, records, get run() { return claimed; } };
 }
@@ -42,6 +42,9 @@ test('opportunity discovery uses official source pages, matches any saved intere
   assert.equal(fixture.records.length, 1);
   const saved = fixture.records[0] as Record<string, unknown>;
   assert.equal(saved.name, 'Systems MSc');
+  assert.equal(saved.type, 'msc_program');
+  assert.equal((saved.sourceEvidence as { verification: string }).verification, 'unreviewed');
+  assert.equal(saved.eligibilityStatus, 'unclear');
   assert.equal(saved.degree, 'MSc');
   assert.equal(saved.field, undefined);
   assert.equal(saved.reviewStatus, 'pending');
@@ -85,7 +88,7 @@ test('repeated request ID is claimed once and performs no second provider reques
 test('already-saved official source is recorded as a duplicate instead of another saved opportunity', async () => {
   const provider: SearchProvider = { async search() { return [{ title: 'untrusted title', url: 'https://eng.kuleuven.be/programmes/systems', excerpt: 'ignored provider excerpt' }]; } };
   const fixture = harness(provider);
-  (fixture.repositories.programs as { saveDiscovered(program: unknown): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }> }).saveDiscovered = async () => ({ id: 'existing-program', duplicate: true, reason: 'source' });
+  (fixture.repositories.opportunities as { saveDiscovered(program: unknown): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }> }).saveDiscovered = async () => ({ id: 'existing-program', duplicate: true, reason: 'source' });
   const result = await runOpportunityDiscovery({
     repositories: fixture.repositories as never, profile, provider, requestId: '44444444-4444-4444-8444-444444444444',
     now: () => new Date('2026-11-11T09:00:00Z'),

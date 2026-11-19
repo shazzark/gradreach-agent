@@ -1,0 +1,10 @@
+{
+  "query": { "more_results_available": true },
+  "web": {
+    "results": [
+      { "title": "Synthetic university profile", "url": "https://university.example.edu/faculty/one", "description": "A mocked snippet about distributed systems." },
+      { "title": "Synthetic research group", "url": "https://research.example.edu/group/two", "description": "A second mocked provider result." },
+      { "title": "Synthetic extra result", "url": "https://university.example.edu/faculty/three", "description": "This result checks the requested result cap." }
+    ]
+  }
+}

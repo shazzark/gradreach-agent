@@ -48,7 +48,7 @@ test('workspace loader uses saved repository values for profile, leads, programs
     candidates: { async list() { return [candidate]; } },
     evidenceTriage: { async list() { return []; } },
     discoveryChecks: { async list() { return []; } },
-    programs: { async list() { return []; } },
+    opportunities: { async list() { return []; } },
     attempts: { async listAll() { return []; } },
     schedulerControl: { async get() { return { paused: true, timeZone: 'Africa/Lagos', dailyLimit: 5 }; } },
     assessments: { async latest() { return undefined; } },

@@ -1,0 +1,4 @@
+{
+  "query": { "more_results_available": false },
+  "web": { "results": [null, { "title": "Incomplete item", "url": "https://university.example.edu/faculty/incomplete" }] }
+}

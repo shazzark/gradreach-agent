@@ -7,6 +7,7 @@ import type { Document } from 'mongodb';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import { createPhase2Indexes, createPhase4Indexes, createRepositories } from '../src/infrastructure/mongo-storage.ts';
 import { migrateDiscoveryCollections } from '../src/infrastructure/discovery-collection-migration.ts';
+import { assertOpportunityCollectionMigrated, migrateOpportunityCollection, opportunityIdentityHash, opportunitySourceHash } from '../src/infrastructure/opportunity-collection-migration.ts';
 import { safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import type { OutreachAttempt, ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-assessment.ts';
@@ -16,7 +17,7 @@ import { assertMongoTestUri, getEnabledMongoTestUri } from './mongo-test-uri.ts'
 const mongoUri = getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEGRATION, uri: process.env.MONGODB_TEST_URI });
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
-  'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'program_assessments', 'outreach_control', 'outreach_attempts',
+  'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'opportunities', 'program_assessments', 'outreach_control', 'outreach_attempts',
   'discovery_job_runs',
   'saved_lead_reprocess_runs', 'confirmed_professors',
 ];
@@ -35,7 +36,11 @@ function sampleCandidate(id: string, email: string): ProfessorCandidate {
 }
 
 const sampleProgram: ProgramRecord = {
-  id: 'synthetic-msc', institution: 'Example University', name: 'MSc Example', country: 'Example country', intake: '2027',
+  id: 'synthetic-msc', type: 'msc_program', institution: 'Example University', name: 'MSc Example', country: 'Example country', intake: '2027',
+  sourceEvidence: { sourceUrl: 'https://example.edu/msc-example', checkedAt: '2026-10-22T08:00:00Z', excerpt: 'MSc Example studies distributed systems.', uncertainty: '', verification: 'reviewed' },
+  lastCheckedAt: '2026-10-22T08:00:00Z',
+  fitExplanation: { outcome: 'potential_fit', reasons: ['Official-source evidence matches one saved research interest.'] },
+  eligibilityStatus: 'unclear', reviewStatus: 'pending',
 };
 
 function sampleAssessment(assessedAt: string): ProgramAssessment {
@@ -56,6 +61,42 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     db = client.db('gradreach_test');
     stage = 'discovery_migration';
     await migrateDiscoveryCollections(db);
+    stage = 'opportunity_collection_migration';
+    const legacyApproved = {
+      id: 'legacy-award-approved', kind: 'scholarship' as const, institution: 'Synthetic Foundation', name: 'Systems Award', country: 'Example country', intake: '2027',
+      sourceEvidence: { sourceUrl: 'https://foundation.example/award', checkedAt: '2026-10-20T08:00:00Z', excerpt: 'Official scholarship award page.', uncertainty: '', verification: 'reviewed' as const },
+      fitExplanation: { outcome: 'potential_fit' as const, reasons: ['One saved interest matches.'] }, eligibilityStatus: 'unclear' as const,
+      reviewStatus: 'approved' as const, reviewedAt: '2026-10-21T08:00:00Z', fundingDetails: { summary: 'Synthetic funded award.', evidence: { sourceUrl: 'https://foundation.example/award', checkedAt: '2026-10-20T08:00:00Z', excerpt: 'Funding is available.', uncertainty: '', verification: 'reviewed' as const } },
+    };
+    const legacyDocument = { _id: legacyApproved.id, program: legacyApproved, updatedAt: new Date('2026-10-21T08:00:00Z'), preservedMetadata: 'synthetic-state' };
+    const migratedRecord = { ...legacyApproved, type: legacyApproved.kind } as unknown as ProgramRecord;
+    delete (migratedRecord as ProgramRecord & { kind?: string }).kind;
+    const identityHash = opportunityIdentityHash(migratedRecord);
+    const sourceHash = opportunitySourceHash(migratedRecord);
+    const alreadyCopied = { ...legacyDocument, opportunity: migratedRecord, canonicalIdentityHash: identityHash, canonicalIdentityClaimHash: identityHash, canonicalSourceHash: sourceHash, canonicalSourceClaimHash: sourceHash } as Document & { _id: string };
+    delete alreadyCopied.program;
+    const legacyPending = { ...legacyApproved, id: 'legacy-award-pending', name: 'Systems Award Variant', kind: 'company_graduate_program' as const,
+      sourceEvidence: { ...legacyApproved.sourceEvidence, sourceUrl: 'https://company.example/graduate' }, reviewStatus: 'pending' as const };
+    delete (legacyPending as Partial<typeof legacyPending>).reviewedAt;
+    await db.collection<Document & { _id: string }>('programs').insertMany([
+      legacyDocument,
+      { _id: 'legacy-award-pending', program: legacyPending, updatedAt: new Date('2026-10-22T08:00:00Z'), preservedMetadata: 'pending-state' },
+    ]);
+    await db.collection<Document & { _id: string }>('opportunities').insertOne(alreadyCopied);
+    await assert.rejects(assertOpportunityCollectionMigrated(db), /legacy programs collection exists/);
+    const migrated = await migrateOpportunityCollection(db);
+    assert.deepEqual(migrated, { migrated: 1, alreadyPresent: 1 });
+    assert.deepEqual(await migrateOpportunityCollection(db), { migrated: 0, alreadyPresent: 0 });
+    await assert.doesNotReject(assertOpportunityCollectionMigrated(db));
+    assert.equal((await db.listCollections({}, { nameOnly: true }).toArray()).some((collection) => collection.name === 'programs'), false);
+    const migratedOpportunity = await db.collection<Document & { _id: string }>('opportunities').findOne({ _id: legacyApproved.id });
+    assert.equal((migratedOpportunity?.opportunity as ProgramRecord).type, 'scholarship');
+    assert.equal((migratedOpportunity?.opportunity as ProgramRecord).kind, undefined);
+    assert.equal((migratedOpportunity?.opportunity as ProgramRecord).reviewStatus, 'approved');
+    assert.equal((migratedOpportunity?.opportunity as ProgramRecord).reviewedAt, legacyApproved.reviewedAt);
+    assert.deepEqual((migratedOpportunity?.opportunity as ProgramRecord).fitExplanation, legacyApproved.fitExplanation);
+    assert.equal((migratedOpportunity?.opportunity as ProgramRecord).sourceEvidence?.sourceUrl, legacyApproved.sourceEvidence.sourceUrl);
+    assert.equal(migratedOpportunity?.preservedMetadata, 'synthetic-state');
     stage = 'index_creation';
     await createPhase2Indexes(db);
     await createPhase4Indexes(db);
@@ -78,9 +119,17 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.candidates.delete('candidate-a'), true);
 
     stage = 'program_and_assessment_storage';
-    await repositories.programs.save(sampleProgram);
-    assert.deepEqual(await repositories.programs.get(sampleProgram.id), sampleProgram);
-    assert.deepEqual(await repositories.programs.list(), [sampleProgram]);
+    await repositories.opportunities.save(sampleProgram);
+    assert.deepEqual(await repositories.opportunities.get(sampleProgram.id), sampleProgram);
+    assert.equal((await repositories.opportunities.list()).length, 3);
+    assert.deepEqual(await repositories.opportunities.saveDiscovered({ ...sampleProgram, id: 'duplicate-source', name: 'Other title, same official source' }), { id: sampleProgram.id, duplicate: true, reason: 'source' });
+    assert.deepEqual(await repositories.opportunities.saveDiscovered({ ...sampleProgram, id: 'duplicate-identity', sourceEvidence: { ...sampleProgram.sourceEvidence!, sourceUrl: 'https://example.edu/another-source' } }), { id: sampleProgram.id, duplicate: true, reason: 'identity' });
+    const updatedOpportunity = { ...sampleProgram, fitExplanation: { outcome: 'unclear' as const, reasons: ['Saved explanation was updated.'] } };
+    await repositories.opportunities.save(updatedOpportunity);
+    assert.deepEqual(await repositories.opportunities.get(sampleProgram.id), updatedOpportunity);
+    assert.equal(await repositories.opportunities.setReviewStatus(sampleProgram.id, 'approved', '2026-10-22T09:00:00Z', 'unclear'), true);
+    assert.equal((await repositories.opportunities.get(sampleProgram.id))?.reviewStatus, 'approved');
+    assert.equal((await repositories.opportunities.get(sampleProgram.id))?.eligibilityStatus, 'unclear');
     await repositories.assessments.save(sampleAssessment('2026-10-19T10:00:00+01:00'));
     await repositories.assessments.save(sampleAssessment('2026-10-20T10:00:00Z'));
     assert.deepEqual(await repositories.assessments.latest(sampleProgram.id), sampleAssessment('2026-10-20T10:00:00.000Z'));
@@ -111,19 +160,33 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(serializedRun.includes('query-canary'), false);
     assert.equal(serializedRun.includes('profile-canary'), false);
 
-    stage = 'opportunity_discovery_history_storage';
+    stage = 'opportunity_run_history_claim';
     const opportunityRun: OpportunityDiscoveryRun = {
       system: 'opportunity', id: 'opportunity_synthetic-run', trigger: 'manual', startedAt: '2026-10-22T08:00:00Z',
       countries: ['Belgium'], state: 'running', counts: { searches: 1, results: 2, pagesFetched: 1, interestMatches: 1, saved: 0, duplicates: 0, rejected: 1, failures: 0 },
       sources: [], stopReasons: [],
     };
     assert.equal(await repositories.opportunityDiscoveryRuns.claim(opportunityRun), true);
+    stage = 'opportunity_run_history_duplicate_claim';
     assert.equal(await repositories.opportunityDiscoveryRuns.claim(opportunityRun), false);
+    stage = 'opportunity_run_history_source_progress';
     await repositories.opportunityDiscoveryRuns.recordSource(opportunityRun.id, {
       country: 'Belgium', source: 'university', hosts: ['eng.kuleuven.be'], state: 'completed',
       counts: { searches: 1, results: 2, pagesFetched: 1, interestMatches: 1, saved: 0, duplicates: 0, rejected: 1, failures: 0 }, stopReasons: ['no_interest_match'],
     });
-    await repositories.opportunityDiscoveryRuns.finish({ ...opportunityRun, state: 'completed', completedAt: '2026-10-22T08:01:00Z' });
+    stage = 'opportunity_run_history_finish';
+    await repositories.opportunityDiscoveryRuns.finish({
+      ...opportunityRun,
+      state: 'completed',
+      completedAt: '2026-10-22T08:01:00Z',
+      // finish replaces the stored run document, so carry forward progress recorded separately.
+      sources: [{
+        country: 'Belgium', source: 'university', hosts: ['eng.kuleuven.be'], state: 'completed',
+        counts: { searches: 1, results: 2, pagesFetched: 1, interestMatches: 1, saved: 0, duplicates: 0, rejected: 1, failures: 0 },
+        stopReasons: ['no_interest_match'],
+      }],
+    });
+    stage = 'opportunity_run_history_readback';
     const savedOpportunityRun = (await repositories.opportunityDiscoveryRuns.list()).find((item) => item.id === opportunityRun.id);
     assert.equal(savedOpportunityRun?.sources[0]?.country, 'Belgium');
     assert.equal((await repositories.discoveryRuns.list(50)).some((item) => item.id === opportunityRun.id), false);
@@ -264,16 +327,18 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     const candidateIndexes = await db.collection('discovery_leads').listIndexes().toArray();
     const attemptIndexes = await db.collection('outreach_attempts').listIndexes().toArray();
     const assessmentIndexes = await db.collection('program_assessments').listIndexes().toArray();
-    const programIndexes = await db.collection('programs').listIndexes().toArray();
+    const programIndexes = await db.collection('opportunities').listIndexes().toArray();
     assert.ok(candidateIndexes.some((index) => index.name === 'unique_normalized_candidate_email'));
     assert.ok(attemptIndexes.some((index) => index.name === 'attempts_by_scheduled_time'));
     assert.ok(attemptIndexes.some((index) => index.name === 'attempts_by_candidate'));
     assert.ok(assessmentIndexes.some((index) => index.name === 'assessments_by_program_and_date'));
-    assert.ok(programIndexes.some((index) => index.name === 'programs_by_country_institution'));
+    assert.ok(programIndexes.some((index) => index.name === 'opportunities_by_type_country_identity'));
+    assert.ok(programIndexes.some((index) => index.name === 'opportunities_unique_identity_claim'));
+    assert.ok(programIndexes.some((index) => index.name === 'opportunities_unique_source_claim'));
 
     assert.equal(await repositories.profiles.delete('synthetic-profile'), true);
     assert.equal(await repositories.profiles.get('synthetic-profile'), undefined);
-    assert.equal(await repositories.programs.delete(sampleProgram.id), true);
+    assert.equal(await repositories.opportunities.delete(sampleProgram.id), true);
   } catch (error) {
     const failure = safeFailureRecord(error);
     throw new Error(JSON.stringify({
@@ -296,6 +361,12 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
           if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 26) throw error;
         }
       }
+      const remainingTestCollections = await db.listCollections({}, { nameOnly: true }).toArray();
+      assert.deepEqual(
+        remainingTestCollections.map((collection) => collection.name).filter((name) => testCollections.includes(name)),
+        [],
+        'MongoDB integration cleanup must remove all named test collections',
+      );
     }
     await client.close();
   }
