@@ -5,8 +5,21 @@ import { tmpdir } from 'node:os';
 import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { beginGmailAuthorization, GMAIL_SEND_SCOPE } from '../src/infrastructure/gmail-oauth.ts';
+import { beginGmailAuthorization, GMAIL_SEND_SCOPE, sendGmailSelfTest } from '../src/infrastructure/gmail-oauth.ts';
 import { GeminiDraftProvider } from '../src/infrastructure/gemini-draft-provider.ts';
+
+test('Gmail self-test refuses to run without a configured owner address', async () => {
+  const previous = process.env.GRADREACH_OWNER_EMAIL;
+  try {
+    delete process.env.GRADREACH_OWNER_EMAIL;
+    await assert.rejects(sendGmailSelfTest(), /GRADREACH_OWNER_EMAIL must be configured before running the Gmail self-test/);
+    process.env.GRADREACH_OWNER_EMAIL = 'not-an-address';
+    await assert.rejects(sendGmailSelfTest(), /GRADREACH_OWNER_EMAIL must be a valid email address before running the Gmail self-test/);
+  } finally {
+    if (previous === undefined) delete process.env.GRADREACH_OWNER_EMAIL;
+    else process.env.GRADREACH_OWNER_EMAIL = previous;
+  }
+});
 
 test('Gmail OAuth asks for send-only scope and stores callback tokens with owner-only mode', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-'));

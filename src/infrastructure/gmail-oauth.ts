@@ -29,6 +29,18 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+/** Resolves the owner address for the transport self-test; refuses an unset or invalid value. */
+function selfTestRecipient(): string {
+  const configured = process.env.GRADREACH_OWNER_EMAIL?.normalize('NFKC').trim().toLowerCase();
+  if (!configured) {
+    throw new Error('GRADREACH_OWNER_EMAIL must be configured before running the Gmail self-test');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(configured)) {
+    throw new Error('GRADREACH_OWNER_EMAIL must be a valid email address before running the Gmail self-test');
+  }
+  return configured;
+}
+
 function safeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -206,27 +218,36 @@ async function sendGmailMessage(message: GmailMessage): Promise<string> {
 
 /** Sends one fixed owner-addressed transport check outside the professor queue. */
 export async function sendGmailSelfTest(): Promise<{ status: 'delivered' | 'failed' | 'uncertain'; providerMessageId?: string; failureCode?: string }> {
+  const recipient = selfTestRecipient();
   const auditPath = resolve('private-data/gmail-self-test-audit.json');
-  const recipient = 'chidozinnam@gmail.com';
+  const lockPath = `${auditPath}.lock`;
   const subject = 'GradReach Gmail delivery test';
   const body = 'This is a one-time test of the GradReach Gmail delivery workflow. It contains no professor outreach, and no reply is needed.';
-  let previous: { status?: string } | undefined;
-  try { previous = JSON.parse(await readFile(auditPath, 'utf8')) as { status?: string }; }
-  catch (error) { if (typeof error === 'object' && error !== null && 'code' in error && error.code !== 'ENOENT') throw new Error('Gmail self-test audit is unreadable; refusing to send'); }
-  if (previous) throw new Error('Gmail self-test was already started; refusing to send again');
   await mkdir(dirname(auditPath), { recursive: true, mode: 0o700 });
-  const audit = { status: 'started', recipient, subject, startedAt: new Date().toISOString() };
-  await writeFile(auditPath, `${JSON.stringify(audit)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  await writeFile(lockPath, `${process.pid}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   try {
-    const providerMessageId = await sendGmailMessage({ to: recipient, subject, body });
-    await writeFile(auditPath, `${JSON.stringify({ ...audit, status: 'delivered', providerMessageId, completedAt: new Date().toISOString() })}\n`, 'utf8');
-    return { status: 'delivered', providerMessageId };
-  } catch (error) {
-    const failure = error instanceof GmailDeliveryError ? error : new GmailDeliveryError('provider-outcome-unknown', 'unknown', false);
-    const status = failure.certainty === 'unknown' ? 'uncertain' : 'failed';
-    await writeFile(auditPath, `${JSON.stringify({ ...audit, status, failureCode: failure.code, completedAt: new Date().toISOString() })}\n`, 'utf8');
-    return { status, failureCode: failure.code };
-  }
+    let previous: { status?: string; attempts?: Array<Record<string, unknown>> } | undefined;
+    try { previous = JSON.parse(await readFile(auditPath, 'utf8')) as { status?: string; attempts?: Array<Record<string, unknown>> }; }
+    catch (error) { if (typeof error === 'object' && error !== null && 'code' in error && error.code !== 'ENOENT') throw new Error('Gmail self-test audit is unreadable; refusing to send'); }
+    const previousAttempts = previous?.attempts ?? (previous ? [previous as Record<string, unknown>] : []);
+    const lastAttempt = previousAttempts.at(-1);
+    if (lastAttempt && lastAttempt.status !== 'failed') throw new Error('Gmail self-test has an active, delivered, or uncertain attempt; refusing to send again');
+    const audit = { status: 'started', recipient, subject, startedAt: new Date().toISOString() };
+    const attempts = [...previousAttempts, audit];
+    await writeFile(auditPath, `${JSON.stringify({ attempts })}\n`, { encoding: 'utf8', flag: previous ? 'w' : 'wx', mode: 0o600 });
+    try {
+      const providerMessageId = await sendGmailMessage({ to: recipient, subject, body });
+      attempts[attempts.length - 1] = { ...audit, status: 'delivered', providerMessageId, completedAt: new Date().toISOString() };
+      await writeFile(auditPath, `${JSON.stringify({ attempts })}\n`, 'utf8');
+      return { status: 'delivered', providerMessageId };
+    } catch (error) {
+      const failure = error instanceof GmailDeliveryError ? error : new GmailDeliveryError('provider-outcome-unknown', 'unknown', false);
+      const status = failure.certainty === 'unknown' ? 'uncertain' : 'failed';
+      attempts[attempts.length - 1] = { ...audit, status, failureCode: failure.code, completedAt: new Date().toISOString() };
+      await writeFile(auditPath, `${JSON.stringify({ attempts })}\n`, 'utf8');
+      return { status, failureCode: failure.code };
+    }
+  } finally { await rm(lockPath, { force: true }); }
 }
 
 export interface GmailDeliveryResult {
