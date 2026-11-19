@@ -23,6 +23,6 @@ export function officialOpportunitySources(country: string): OfficialOpportunity
   ].map((source) => ({ ...source, hosts: [...source.hosts] }));
 }
 
-export function opportunityKindForSource(source: OpportunitySearchSource): 'msc_program' | 'scholarship' | 'company_graduate_program' {
+export function opportunityTypeForSource(source: OpportunitySearchSource): 'msc_program' | 'scholarship' | 'company_graduate_program' {
   return source === 'university' ? 'msc_program' : source === 'scholarship' ? 'scholarship' : 'company_graduate_program';
 }

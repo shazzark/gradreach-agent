@@ -13,7 +13,7 @@ import { approveCandidateForQueue } from '../application/outreach-review.ts';
 import { acceptDiscoveredProfessorLead, rejectDiscoveredProfessorLead } from '../application/discovery-lead-review.ts';
 import { parseApplicantProfile } from '../domain/applicant-profile.ts';
 import { markCandidateEvidenceReviewed } from '../application/research-discovery.ts';
-import { assessProgram, parseProgramRecord } from '../domain/program-assessment.ts';
+import { assessOpportunityFit, parseProgramRecord } from '../domain/program-assessment.ts';
 import type { ProfessorCandidate } from '../domain/outreach-queue.ts';
 import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { loadApplicantProfile } from '../infrastructure/local-profile.ts';
@@ -57,7 +57,7 @@ async function run(): Promise<void> {
       if (choice === '0') break;
 
       if (choice === '1') {
-        const [candidates, programs, attempts] = await Promise.all([repositories.candidates.list(), repositories.programs.list(), repositories.attempts.listAll()]);
+        const [candidates, programs, attempts] = await Promise.all([repositories.candidates.list(), repositories.opportunities.list(), repositories.attempts.listAll()]);
         const assessments = (await Promise.all(programs.map((program) => repositories.assessments.latest(program.id)))).filter((item) => item !== undefined);
         const snapshot = buildDashboardSnapshot({ candidates, programs, attempts, assessments, control, now: new Date().toISOString() });
         stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
@@ -124,11 +124,10 @@ async function run(): Promise<void> {
       } else if (choice === '8') {
         const path = resolve((await ask('Reviewed program JSON path: ')).trim());
         try {
-          const program = parseProgramRecord(JSON.parse(await readFile(path, 'utf8')) as unknown);
-          const assessment = assessProgram({ program, profile, assessedAt: new Date().toISOString() });
-          await repositories.programs.save(program);
-          await repositories.assessments.save(assessment);
-          stdout.write(`Program saved and assessed: admissions ${assessment.admissions.outcome}, English ${assessment.english.outcome}, tuition ${assessment.tuition.outcome}, funding ${assessment.funding.outcome}, intake ${assessment.intake.outcome}, deadline ${assessment.deadline.outcome}, overall ${assessment.overall}.\n`);
+          const parsed = parseProgramRecord(JSON.parse(await readFile(path, 'utf8')) as unknown);
+          const opportunity = { ...parsed, fitExplanation: assessOpportunityFit(parsed, profile), eligibilityStatus: 'unclear' as const };
+          await repositories.opportunities.save(opportunity);
+          stdout.write(`Opportunity saved pending owner review; potential fit: ${opportunity.fitExplanation.outcome}. Eligibility remains unclear until owner review.\n`);
         } catch {
           stdout.write('Program file could not be imported. Confirm its JSON structure and reviewed official evidence fields.\n');
         }

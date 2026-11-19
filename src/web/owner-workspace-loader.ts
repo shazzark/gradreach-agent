@@ -28,7 +28,7 @@ export async function loadOwnerWorkspace(repositories: GradReachRepositories, no
     repositories.candidates.list(),
     repositories.evidenceTriage.list(),
     repositories.discoveryChecks.list(100),
-    repositories.programs.list(),
+    repositories.opportunities.list(),
     repositories.attempts.listAll(),
     repositories.schedulerControl.get(),
   ]);

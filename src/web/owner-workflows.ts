@@ -1,7 +1,7 @@
 import { approveCandidateForQueue } from '../application/outreach-review.ts';
 import { createOutreachDraft } from '../application/outreach-draft.ts';
 import { markCandidateEvidenceReviewed } from '../application/research-discovery.ts';
-import { assessProgram, parseProgramRecord } from '../domain/program-assessment.ts';
+import { assessOpportunityFit, assessProgram, parseProgramRecord } from '../domain/program-assessment.ts';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { GradReachRepositories } from '../infrastructure/mongo-storage.ts';
 import type { OutreachAttempt } from '../domain/outreach-queue.ts';
@@ -55,11 +55,13 @@ export async function assessSavedProgram(input: {
   profile: ApplicantProfile;
   assessedAt?: string;
 }): Promise<void> {
-  const program = await input.repositories.programs.get(input.programId);
+  const program = await input.repositories.opportunities.get(input.programId);
   if (!program) throw new Error('Program not found');
+  if ((program.type ?? 'msc_program') !== 'msc_program') throw new Error('Only MSc programs use the applicant eligibility assessment');
   if (program.reviewStatus !== 'approved') throw new Error('Opportunity must be approved by the owner before assessment');
   const assessment = assessProgram({ program, profile: input.profile, ...(input.assessedAt ? { assessedAt: input.assessedAt } : {}) });
   await input.repositories.assessments.save(assessment);
+  await input.repositories.opportunities.save({ ...program, eligibilityStatus: assessment.overall });
 }
 
 export async function importAndAssessProgram(input: {
@@ -68,8 +70,9 @@ export async function importAndAssessProgram(input: {
   program: unknown;
   assessedAt?: string;
 }): Promise<{ id: string; duplicate: boolean }> {
-  const program = parseProgramRecord(input.program);
-  const saved = await input.repositories.programs.save(program);
+  const parsed = parseProgramRecord(input.program);
+  const program = { ...parsed, fitExplanation: assessOpportunityFit(parsed, input.profile), eligibilityStatus: 'unclear' as const };
+  const saved = await input.repositories.opportunities.save(program);
   if (saved.duplicate) return saved;
   return saved;
 }
@@ -80,7 +83,7 @@ export async function reviewProgramOpportunity(input: {
   decision: 'approved' | 'rejected';
   reviewedAt?: string;
 }): Promise<void> {
-  const program = await input.repositories.programs.get(input.programId);
+  const program = await input.repositories.opportunities.get(input.programId);
   if (!program) throw new Error('Opportunity not found');
   if (input.decision === 'approved') {
     const evidence = [program.sourceEvidence, program.eligibility?.evidence, program.fundingDetails?.evidence, program.compensation?.evidence,
@@ -94,16 +97,20 @@ export async function reviewProgramOpportunity(input: {
       reviewed.admissions?.evidence, reviewed.english?.evidence, reviewed.tuition?.evidence, reviewed.deadline?.evidence,
       ...(reviewed.fundingRoutes ?? []).map((route) => route.evidence)].filter((item) => item !== undefined);
     for (const item of allEvidence) item.verification = 'reviewed';
-    await input.repositories.programs.save(reviewed);
-    if ((reviewed.kind ?? 'msc_program') === 'msc_program') {
+    await input.repositories.opportunities.save(reviewed);
+    let eligibilityStatus: 'eligible' | 'unclear' | 'ineligible' = 'unclear';
+    if ((reviewed.type ?? 'msc_program') === 'msc_program') {
       const profile = await input.repositories.profiles.get('primary');
       if (profile) {
         const assessment = assessProgram({ program: reviewed, profile, ...(input.reviewedAt ? { assessedAt: input.reviewedAt } : {}) });
         await input.repositories.assessments.save(assessment);
+        eligibilityStatus = assessment.overall;
       }
     }
+    await input.repositories.opportunities.setReviewStatus(input.programId, 'approved', input.reviewedAt ?? new Date().toISOString(), eligibilityStatus);
+    return;
   }
-  await input.repositories.programs.setReviewStatus(input.programId, input.decision, input.reviewedAt ?? new Date().toISOString());
+  await input.repositories.opportunities.setReviewStatus(input.programId, input.decision, input.reviewedAt ?? new Date().toISOString());
 }
 
 export async function saveProfileSettings(input: {

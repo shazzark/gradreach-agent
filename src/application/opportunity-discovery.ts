@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { OfficialEvidence, ProgramRecord } from '../domain/program-assessment.ts';
-import { parseProgramRecord } from '../domain/program-assessment.ts';
+import { assessOpportunityFit, parseProgramRecord } from '../domain/program-assessment.ts';
 import { matchingResearchInterests } from '../domain/research-interest-match.ts';
-import { opportunityKindForSource, officialOpportunitySources } from '../config/official-opportunity-hosts.ts';
+import { opportunityTypeForSource, officialOpportunitySources } from '../config/official-opportunity-hosts.ts';
 import { fetchOfficialPage, extractOfficialPageExcerpt } from './research-discovery.ts';
 import { safeFailureRecord } from '../infrastructure/sanitized-failure.ts';
 import type { SearchProvider } from '../infrastructure/brave-search-provider.ts';
@@ -17,7 +17,7 @@ export interface OpportunityDiscoveryRepositories {
     recordSource(runId: string, source: OpportunitySourceRun): Promise<void>;
     finish(run: OpportunityDiscoveryRun): Promise<boolean>;
   };
-  programs: {
+  opportunities: {
     saveDiscovered(program: ProgramRecord): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }>;
   };
 }
@@ -103,12 +103,12 @@ function createRecord(input: {
   const excerpt = extractOfficialPageExcerpt(input.html, 1200);
   const title = pageTitle(input.html);
   if (!excerpt || !title) return undefined;
-  const kind = opportunityKindForSource(input.source);
+  const type = opportunityTypeForSource(input.source);
   const factEvidence = sourceFacts(excerpt);
   const rootEvidence = evidence(input.sourceUrl, input.checkedAt, excerpt);
   const program: Record<string, unknown> = {
-    id: `opportunity-${createHash('sha256').update(`${kind}|${input.country}|${canonicalSourceForId(input.sourceUrl)}`).digest('hex').slice(0, 32)}`,
-    kind,
+    id: `opportunity-${createHash('sha256').update(`${type}|${input.country}|${canonicalSourceForId(input.sourceUrl)}`).digest('hex').slice(0, 32)}`,
+    type,
     institution: input.source === 'university' ? (OFFICIAL_INSTITUTION_BY_REGION as Record<string, string>)[input.country] ?? input.organization : input.organization,
     name: title,
     country: input.country,
@@ -254,13 +254,14 @@ export async function runOpportunityDiscovery(input: {
               const organization = fetchedHost === 'www2.daad.de' ? 'DAAD'
                 : definition.hosts.includes('erasmus-plus.ec.europa.eu') && source.source === 'scholarship' ? 'Erasmus+' : definition.organization;
               record = createRecord({ html: fetched.html, sourceUrl: fetched.url, source: source.source, organization, country, fields: profile.applicant.target.fields, checkedAt });
+              if (record) record.fitExplanation = assessOpportunityFit(record, profile);
               } catch { /* Malformed source details stop at the record validator. */ }
               if (!record) {
                 source.counts.rejected++; run.counts.rejected++;
                 reasonOnce(source.stopReasons, 'invalid_official_record');
                 continue;
               }
-              const saved = await input.repositories.programs.saveDiscovered(record);
+              const saved = await input.repositories.opportunities.saveDiscovered(record);
               if (saved.duplicate) {
                 source.counts.duplicates++; run.counts.duplicates++;
                 reasonOnce(source.stopReasons, saved.reason === 'source' ? 'duplicate_source' : 'duplicate_identity');

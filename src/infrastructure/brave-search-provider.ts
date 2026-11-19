@@ -1,8 +1,12 @@
 import { failureForHttpStatus, safeBraveErrorResponseDiagnostics, safeBraveResponseDiagnostics, sanitizedIntegrationError, SanitizedIntegrationError } from './sanitized-failure.ts';
 
 export interface SearchResult {
+  /** Stable adapter identifier; never contains request credentials or query text. */
+  provider?: string;
   title: string;
   url: string;
+  /** Normalized provider snippet. `excerpt` remains the application-compatible field. */
+  snippet?: string;
   excerpt: string;
   /** One-based position in the provider response; never persisted with candidate content. */
   resultNumber?: number;
@@ -36,9 +40,23 @@ export interface SearchOptions {
 }
 
 export interface SearchPage {
+  provider?: string;
   results: SearchResult[];
   moreResultsAvailable: boolean;
   paginationKnown: boolean;
+  /** Excludes query text, credentials, headers, and request URLs. */
+  requestMetadata?: SafeSearchRequestMetadata;
+}
+
+export interface SafeSearchRequestMetadata {
+  requestedCount: number;
+  providerResultCount: number;
+  acceptedResultCount: number;
+  offset: number;
+  paginationKnown: boolean;
+  moreResultsAvailable: boolean;
+  countryCode?: string;
+  targetingMode?: SearchOptions['targetingMode'];
 }
 
 // These country values are explicitly surfaced by Brave's API reference: visible enum entries,
@@ -50,6 +68,7 @@ export function isVerifiedBraveCountryCode(value: string | undefined): value is 
 }
 
 export interface SearchProvider {
+  readonly providerName?: string;
   search(query: string, options?: SearchOptions): Promise<SearchResult[]>;
   searchPage?(query: string, options?: SearchOptions): Promise<SearchPage>;
 }
@@ -61,6 +80,7 @@ interface BraveResponse {
 
 /** Brave Search adapter. Credentials stay in process configuration and are never included in errors. */
 export class BraveSearchProvider implements SearchProvider {
+  readonly providerName = 'brave';
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
 
@@ -80,7 +100,8 @@ export class BraveSearchProvider implements SearchProvider {
     url.searchParams.set('q', query);
     const requestedCount = options.count ?? 10;
     if (!Number.isFinite(requestedCount)) throw new SanitizedIntegrationError('invalid_request');
-    url.searchParams.set('count', String(Math.min(20, Math.max(1, Math.trunc(requestedCount)))));
+    const boundedCount = Math.min(20, Math.max(1, Math.trunc(requestedCount)));
+    url.searchParams.set('count', String(boundedCount));
     const offset = options.offset ?? 0;
     if (!Number.isInteger(offset) || offset < 0 || offset > 9) throw new SanitizedIntegrationError('invalid_request');
     url.searchParams.set('offset', String(offset));
@@ -125,8 +146,12 @@ export class BraveSearchProvider implements SearchProvider {
     if (typeof web !== 'object' || web === null || !Array.isArray(web.results)) {
       throw new SanitizedIntegrationError('invalid_content', responseDetails);
     }
+    if (web.results.some((result) => typeof result !== 'object' || result === null || Array.isArray(result))) {
+      throw new SanitizedIntegrationError('invalid_content', responseDetails);
+    }
     const accepted: SearchResult[] = [];
     for (const [index, result] of web.results.entries()) {
+      if (accepted.length >= boundedCount) break;
       const title = typeof result.title === 'string' ? result.title.trim() : '';
       const resultUrl = typeof result.url === 'string' ? result.url : '';
       const excerpt = typeof result.description === 'string' ? result.description.trim() : '';
@@ -141,13 +166,25 @@ export class BraveSearchProvider implements SearchProvider {
         await options.onRejectedResult?.(checks, index + 1);
         continue;
       }
-      accepted.push({ title, url: resultUrl, excerpt, resultNumber: index + 1 });
+      accepted.push({ provider: this.providerName, title, url: resultUrl, snippet: excerpt, excerpt, resultNumber: index + 1 });
     }
     const moreResultsAvailable = bravePayload.query?.more_results_available;
+    const paginationKnown = typeof moreResultsAvailable === 'boolean';
     return {
+      provider: this.providerName,
       results: accepted,
       moreResultsAvailable: moreResultsAvailable === true,
-      paginationKnown: typeof moreResultsAvailable === 'boolean',
+      paginationKnown,
+      requestMetadata: {
+        requestedCount: boundedCount,
+        providerResultCount: web.results.length,
+        acceptedResultCount: accepted.length,
+        offset,
+        paginationKnown,
+        moreResultsAvailable: moreResultsAvailable === true,
+        ...(options.countryCode ? { countryCode: options.countryCode.toUpperCase() } : {}),
+        ...(options.targetingMode ? { targetingMode: options.targetingMode } : {}),
+      },
     };
   }
 }

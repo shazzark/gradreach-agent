@@ -15,6 +15,8 @@ export interface OfficialEvidence {
 
 export interface ProgramRecord {
   id: string;
+  type?: OpportunityKind;
+  /** Read-only compatibility for older local imports; persisted records use `type`. */
   kind?: OpportunityKind;
   institution: string;
   name: string;
@@ -24,6 +26,8 @@ export interface ProgramRecord {
   degree?: string;
   sourceEvidence?: OfficialEvidence;
   lastCheckedAt?: string;
+  fitExplanation?: OpportunityFit;
+  eligibilityStatus?: AssessmentOutcome;
   reviewStatus?: OpportunityReviewStatus;
   reviewedAt?: string;
   fundingDetails?: { summary: string; evidence: OfficialEvidence };
@@ -56,7 +60,7 @@ export interface ProgramRecord {
 /** Stable identity complements source-URL comparison when two official pages describe the same opportunity. */
 export function canonicalizeOpportunityIdentity(program: ProgramRecord): string {
   const normalize = (value: string) => value.toLocaleLowerCase('en').normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  return [program.kind ?? 'msc_program', program.country, program.institution, program.name].map(normalize).join('|');
+  return [program.type ?? program.kind ?? 'msc_program', program.country, program.institution, program.name].map(normalize).join('|');
 }
 
 export interface AssessmentFinding {
@@ -97,7 +101,7 @@ export function assessOpportunityFit(program: ProgramRecord, profile: ApplicantP
     : [];
   if (matchedInterests.length) reasons.push(`Official-source evidence matches ${matchedInterests.length} saved research interest${matchedInterests.length === 1 ? '' : 's'}.`);
   else if (profile.applicant.target.researchInterests.length) reasons.push('No saved research-interest match is recorded in the official-source excerpt.');
-  if (program.kind === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc')) reasons.push('Degree level is not stated.');
+  if ((program.type ?? program.kind ?? 'msc_program') === 'msc_program' && !program.degree?.trim() && !program.name.toLowerCase().includes('msc')) reasons.push('Degree level is not stated.');
   const mismatch = (profile.applicant.target.countries.length > 0 && !country) || (fieldKnown && fields.length > 0 && !fieldMatches);
   return { outcome: mismatch ? 'not_a_fit' : matchedInterests.length ? 'potential_fit' : 'unclear', reasons };
 }
@@ -137,12 +141,12 @@ function parseEvidence(value: unknown, label: string, allowUnreviewed = false): 
     sourceUrl, checkedAt,
     excerpt: nonEmptyText(input.excerpt, `${label}.excerpt`),
     uncertainty: textValue(input.uncertainty, `${label}.uncertainty`),
-    verification: 'reviewed',
+    verification: input.verification === 'unreviewed' && allowUnreviewed ? 'unreviewed' : 'reviewed',
   };
 }
 
 /** Validates program facts imported from a local file; each recorded fact must carry human-reviewed evidence. */
-export function parseProgramRecord(value: unknown, options: { allowUnreviewedEvidence?: boolean } = {}): ProgramRecord {
+export function parseProgramRecord(value: unknown, options: { allowUnreviewedEvidence?: boolean; preserveReviewState?: boolean } = {}): ProgramRecord {
   const input = objectValue(value, 'program');
   const parseFactEvidence = (value: unknown, label: string) => parseEvidence(value, label, options.allowUnreviewedEvidence === true);
   const result: ProgramRecord = {
@@ -152,9 +156,10 @@ export function parseProgramRecord(value: unknown, options: { allowUnreviewedEvi
     country: nonEmptyText(input.country, 'program.country'),
     intake: textValue(input.intake, 'program.intake'),
   };
-  const kind = input.kind ?? 'msc_program';
-  if (!['msc_program', 'scholarship', 'company_graduate_program'].includes(String(kind))) throw new Error('program.kind is invalid');
-  result.kind = kind as OpportunityKind;
+  const type = input.type ?? input.kind ?? 'msc_program';
+  if (!['msc_program', 'scholarship', 'company_graduate_program'].includes(String(type))) throw new Error('opportunity.type is invalid');
+  result.type = type as OpportunityKind;
+  result.eligibilityStatus = 'unclear';
   if (input.field !== undefined) result.field = textValue(input.field, 'program.field');
   if (input.degree !== undefined) result.degree = textValue(input.degree, 'program.degree');
   if (input.sourceEvidence !== undefined) result.sourceEvidence = parseFactEvidence(input.sourceEvidence, 'program.sourceEvidence');
@@ -172,7 +177,30 @@ export function parseProgramRecord(value: unknown, options: { allowUnreviewedEvi
     const eligibility = objectValue(input.eligibility, 'program.eligibility');
     result.eligibility = { summary: nonEmptyText(eligibility.summary, 'program.eligibility.summary'), evidence: parseFactEvidence(eligibility.evidence, 'program.eligibility.evidence') };
   }
-  if ((input.kind !== undefined || result.kind !== 'msc_program') && !result.sourceEvidence) throw new Error('opportunity requires reviewed official sourceEvidence');
+  if ((input.type !== undefined || input.kind !== undefined || result.type !== 'msc_program') && !result.sourceEvidence) throw new Error('opportunity requires reviewed official sourceEvidence');
+  if (input.fitExplanation !== undefined) {
+    const fit = objectValue(input.fitExplanation, 'opportunity.fitExplanation');
+    if (!['potential_fit', 'unclear', 'not_a_fit'].includes(String(fit.outcome)) || !Array.isArray(fit.reasons) ||
+        fit.reasons.length > 8 || !fit.reasons.every((reason) => typeof reason === 'string' && reason.trim() && reason.length <= 240)) {
+      throw new Error('opportunity.fitExplanation is invalid');
+    }
+    result.fitExplanation = { outcome: fit.outcome as OpportunityFit['outcome'], reasons: [...fit.reasons] as string[] };
+  }
+  if (input.eligibilityStatus !== undefined) {
+    if (!['eligible', 'unclear', 'ineligible'].includes(String(input.eligibilityStatus))) throw new Error('opportunity.eligibilityStatus is invalid');
+    result.eligibilityStatus = input.eligibilityStatus as AssessmentOutcome;
+  }
+  const preserveReviewState = options.preserveReviewState === true;
+  if (preserveReviewState && input.reviewStatus !== undefined) {
+    if (!['pending', 'approved', 'rejected'].includes(String(input.reviewStatus))) throw new Error('opportunity.reviewStatus is invalid');
+    result.reviewStatus = input.reviewStatus as OpportunityReviewStatus;
+    if (input.reviewedAt !== undefined) {
+      const reviewedAt = textValue(input.reviewedAt, 'opportunity.reviewedAt');
+      if (Number.isNaN(Date.parse(reviewedAt))) throw new Error('opportunity.reviewedAt must be a valid date');
+      result.reviewedAt = reviewedAt;
+    }
+  }
+  if (!preserveReviewState || result.reviewStatus !== 'approved') result.eligibilityStatus = 'unclear';
   if (input.admissions !== undefined) {
     const item = objectValue(input.admissions, 'program.admissions');
     const minimumGpa = item.minimumGpa === undefined ? undefined : objectValue(item.minimumGpa, 'program.admissions.minimumGpa');

@@ -1,14 +1,16 @@
 import { MongoClient } from 'mongodb';
+import { createHash } from 'node:crypto';
 import type { Collection, Db, Document } from 'mongodb';
 import { parseApplicantProfile, type ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { CandidateEvidenceTriage, OutreachAttempt, ProfessorCandidate, SchedulerControl } from '../domain/outreach-queue.ts';
-import { canonicalizeOpportunityIdentity, type ProgramAssessment, type ProgramRecord } from '../domain/program-assessment.ts';
+import { canonicalizeOpportunityIdentity, parseProgramRecord, type AssessmentOutcome, type ProgramAssessment, type ProgramRecord } from '../domain/program-assessment.ts';
 import type { DiscoveryEvidenceCheck, DiscoveryRun, DiscoverySchedule } from '../application/automatic-discovery.ts';
 import type { OpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
 import { sanitizeOpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
 import { MAX_SAVED_LEADS_PER_REPROCESS_RUN, type SavedLeadReprocessResult, type SavedLeadReprocessRun } from '../domain/saved-lead-reprocessing.ts';
 import { getLocalDateKey } from '../domain/outreach-queue.ts';
 import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
+import { assertOpportunityCollectionMigrated, opportunityIdentityHash, opportunitySourceHash } from './opportunity-collection-migration.ts';
 import type { ConfirmedProfessor } from '../application/confirmed-professors.ts';
 
 interface StoredProfile extends Document {
@@ -37,9 +39,13 @@ interface StoredAttempt extends Document {
   updatedAt: Date;
 }
 
-interface StoredProgram extends Document {
+interface StoredOpportunity extends Document {
   _id: string;
-  program: ProgramRecord;
+  opportunity: ProgramRecord;
+  canonicalIdentityHash: string;
+  canonicalIdentityClaimHash?: string;
+  canonicalSourceHash?: string;
+  canonicalSourceClaimHash?: string;
   updatedAt: Date;
 }
 
@@ -538,84 +544,107 @@ export class OutreachAttemptRepository {
   }
 }
 
-export class ProgramRepository {
-  private readonly collection: Collection<StoredProgram>;
+export class OpportunityRepository {
+  private readonly collection: Collection<StoredOpportunity>;
 
-  constructor(collection: Collection<StoredProgram>) { this.collection = collection; }
+  constructor(collection: Collection<StoredOpportunity>) { this.collection = collection; }
 
-  async get(programId: string): Promise<ProgramRecord | undefined> {
-    return (await this.collection.findOne({ _id: programId }))?.program;
+  async get(opportunityId: string): Promise<ProgramRecord | undefined> {
+    const stored = await this.collection.findOne({ _id: opportunityId });
+    return stored?.opportunity ? normalizeStoredOpportunity(stored.opportunity) : undefined;
   }
 
   async list(): Promise<ProgramRecord[]> {
-    const documents = await this.collection.find().sort({ 'program.country': 1, 'program.institution': 1, 'program.name': 1 }).toArray();
-    return documents.map((document) => document.program);
+    const documents = await this.collection.find().sort({ 'opportunity.country': 1, 'opportunity.institution': 1, 'opportunity.name': 1 }).toArray();
+    return documents.map((document) => normalizeStoredOpportunity(document.opportunity));
   }
 
-  async findDuplicate(program: ProgramRecord): Promise<{ id: string; reason: 'source' | 'identity' } | undefined> {
-    const documents = await this.collection.find({ _id: { $ne: program.id } }).project({ _id: 1, program: 1 }).toArray();
-    const sourceIdentity = program.sourceEvidence?.sourceUrl ? canonicalProgramSource(program.sourceEvidence.sourceUrl) : undefined;
-    const identity = canonicalizeOpportunityIdentity(program);
+  async findDuplicate(opportunity: ProgramRecord, excludeId?: string): Promise<{ id: string; reason: 'source' | 'identity' } | undefined> {
+    const canonicalIdentityHash = opportunityIdentityHash(opportunity);
+    const canonicalSourceHash = opportunitySourceHash(opportunity);
+    const clauses: Document[] = [{ canonicalIdentityHash }, { canonicalIdentityClaimHash: canonicalIdentityHash }];
+    if (canonicalSourceHash) clauses.push({ canonicalSourceHash }, { canonicalSourceClaimHash: canonicalSourceHash });
+    const documents = await this.collection.find({ ...(excludeId ? { _id: { $ne: excludeId } } : {}), $or: clauses })
+      .project({ _id: 1, opportunity: 1 }).limit(10).toArray();
     for (const document of documents) {
-      const candidate = document.program;
-      if (!candidate) continue;
-      if (sourceIdentity && candidate.sourceEvidence?.sourceUrl && canonicalProgramSource(candidate.sourceEvidence.sourceUrl) === sourceIdentity) {
-        return { id: document._id, reason: 'source' };
-      }
-      if (canonicalizeOpportunityIdentity(candidate) === identity) return { id: document._id, reason: 'identity' };
+      if (!document.opportunity) continue;
+      const candidate = normalizeStoredOpportunity(document.opportunity);
+      if (canonicalSourceHash && opportunitySourceHash(candidate) === canonicalSourceHash) return { id: document._id, reason: 'source' };
+      if (canonicalizeOpportunityIdentity(candidate) === canonicalizeOpportunityIdentity(opportunity)) return { id: document._id, reason: 'identity' };
     }
     return undefined;
   }
 
-  async save(program: ProgramRecord): Promise<{ id: string; duplicate: boolean }> {
-    const duplicate = await this.findDuplicate(program);
+  async save(opportunity: ProgramRecord): Promise<{ id: string; duplicate: boolean }> {
+    const normalized = normalizeStoredOpportunity(opportunity);
+    const duplicate = await this.findDuplicate(normalized, normalized.id);
     if (duplicate) return { id: duplicate.id, duplicate: true };
-    await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
-    return { id: program.id, duplicate: false };
-  }
-
-  async saveDiscovered(program: ProgramRecord): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }> {
-    const existing = await this.collection.findOne({ _id: program.id }, { projection: { _id: 1, program: 1 } });
-    if (existing) return { id: existing._id, duplicate: true, reason: existing.program?.sourceEvidence?.sourceUrl && program.sourceEvidence?.sourceUrl && canonicalProgramSource(existing.program.sourceEvidence.sourceUrl) === canonicalProgramSource(program.sourceEvidence.sourceUrl) ? 'source' : 'identity' };
-    const duplicate = await this.findDuplicateWithoutIdExclusion(program);
-    if (duplicate) return { id: duplicate.id, duplicate: true, reason: duplicate.reason };
-    await this.collection.replaceOne({ _id: program.id }, { _id: program.id, program, updatedAt: new Date() }, { upsert: true });
-    return { id: program.id, duplicate: false };
-  }
-
-  private async findDuplicateWithoutIdExclusion(program: ProgramRecord): Promise<{ id: string; reason: 'source' | 'identity' } | undefined> {
-    const documents = await this.collection.find().project({ _id: 1, program: 1 }).toArray();
-    const sourceIdentity = program.sourceEvidence?.sourceUrl ? canonicalProgramSource(program.sourceEvidence.sourceUrl) : undefined;
-    const identity = canonicalizeOpportunityIdentity(program);
-    for (const document of documents) {
-      const candidate = document.program;
-      if (!candidate) continue;
-      if (sourceIdentity && candidate.sourceEvidence?.sourceUrl && canonicalProgramSource(candidate.sourceEvidence.sourceUrl) === sourceIdentity) return { id: document._id, reason: 'source' };
-      if (canonicalizeOpportunityIdentity(candidate) === identity) return { id: document._id, reason: 'identity' };
+    try {
+      await this.collection.replaceOne({ _id: normalized.id }, opportunityDocument(normalized), { upsert: true });
+      return { id: normalized.id, duplicate: false };
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      const concurrentDuplicate = await this.findDuplicate(normalized, normalized.id);
+      if (concurrentDuplicate) return { ...concurrentDuplicate, duplicate: true };
+      throw error;
     }
-    return undefined;
   }
 
-  async setReviewStatus(programId: string, status: 'approved' | 'rejected', reviewedAt: string): Promise<boolean> {
+  async saveDiscovered(opportunity: ProgramRecord): Promise<{ id: string; duplicate: boolean; reason?: 'source' | 'identity' }> {
+    const normalized = normalizeStoredOpportunity(opportunity);
+    const existing = await this.collection.findOne({ _id: normalized.id }, { projection: { _id: 1, opportunity: 1 } });
+    if (existing) {
+      const oldSourceHash = existing.opportunity ? opportunitySourceHash(normalizeStoredOpportunity(existing.opportunity)) : undefined;
+      return { id: existing._id, duplicate: true, reason: oldSourceHash && oldSourceHash === opportunitySourceHash(normalized) ? 'source' : 'identity' };
+    }
+    const duplicate = await this.findDuplicate(normalized);
+    if (duplicate) return { ...duplicate, duplicate: true };
+    try {
+      await this.collection.insertOne(opportunityDocument(normalized));
+      return { id: normalized.id, duplicate: false };
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      const concurrentDuplicate = await this.findDuplicate(normalized);
+      if (concurrentDuplicate) return { ...concurrentDuplicate, duplicate: true };
+      const sameId = await this.collection.findOne({ _id: normalized.id }, { projection: { _id: 1, opportunity: 1 } });
+      if (sameId) return { id: sameId._id, duplicate: true, reason: 'identity' };
+      throw error;
+    }
+  }
+
+  async setReviewStatus(opportunityId: string, status: 'approved' | 'rejected', reviewedAt: string, eligibilityStatus: AssessmentOutcome = 'unclear'): Promise<boolean> {
     const reviewed = new Date(reviewedAt);
-    if (Number.isNaN(reviewed.getTime())) throw new Error('reviewedAt must be a valid date');
-    const result = await this.collection.updateOne({ _id: programId }, {
-      $set: { 'program.reviewStatus': status, 'program.reviewedAt': reviewed.toISOString(), updatedAt: reviewed },
+    if (Number.isNaN(reviewed.getTime()) || !['eligible', 'unclear', 'ineligible'].includes(eligibilityStatus)) throw new Error('Invalid opportunity review state');
+    const result = await this.collection.updateOne({ _id: opportunityId }, {
+      $set: { 'opportunity.reviewStatus': status, 'opportunity.reviewedAt': reviewed.toISOString(), 'opportunity.eligibilityStatus': status === 'approved' ? eligibilityStatus : 'unclear', updatedAt: reviewed },
     });
     return result.modifiedCount === 1;
   }
 
-  async delete(programId: string): Promise<boolean> {
-    const result = await this.collection.deleteOne({ _id: programId });
+  async delete(opportunityId: string): Promise<boolean> {
+    const result = await this.collection.deleteOne({ _id: opportunityId });
     return result.deletedCount === 1;
   }
 }
 
-function canonicalProgramSource(value: string): string {
-  const url = new URL(value);
-  url.hash = '';
-  url.search = '';
-  return url.toString().replace(/\/$/, '');
+function normalizeStoredOpportunity(value: ProgramRecord): ProgramRecord {
+  const normalized = parseProgramRecord({ ...value, type: value.type ?? value.kind ?? 'msc_program' }, { allowUnreviewedEvidence: true, preserveReviewState: true });
+  const result = { ...value, ...normalized, type: normalized.type! };
+  delete result.kind;
+  return result;
+}
+
+function opportunityDocument(opportunity: ProgramRecord): StoredOpportunity {
+  const canonicalIdentityHash = opportunityIdentityHash(opportunity);
+  const canonicalSourceHash = opportunitySourceHash(opportunity);
+  return {
+    _id: opportunity.id, opportunity, canonicalIdentityHash, canonicalIdentityClaimHash: canonicalIdentityHash,
+    ...(canonicalSourceHash ? { canonicalSourceHash, canonicalSourceClaimHash: canonicalSourceHash } : {}), updatedAt: new Date(),
+  };
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;
 }
 
 export class ProgramAssessmentRepository {
@@ -697,7 +726,7 @@ export interface GradReachRepositories {
   candidates: ProfessorCandidateRepository;
   evidenceTriage: CandidateEvidenceTriageRepository;
   attempts: OutreachAttemptRepository;
-  programs: ProgramRepository;
+  opportunities: OpportunityRepository;
   assessments: ProgramAssessmentRepository;
   schedulerControl: SchedulerControlRepository;
   discoverySchedule: AutomaticDiscoveryScheduleRepository;
@@ -715,7 +744,7 @@ export function createRepositories(db: Db): GradReachRepositories {
     candidates: new ProfessorCandidateRepository(db.collection<StoredCandidate>('discovery_leads')),
     evidenceTriage: new CandidateEvidenceTriageRepository(db.collection<StoredCandidateTriage>('lead_triage_recommendations')),
     attempts: new OutreachAttemptRepository(db.collection<StoredAttempt>('outreach_attempts')),
-    programs: new ProgramRepository(db.collection<StoredProgram>('programs')),
+    opportunities: new OpportunityRepository(db.collection<StoredOpportunity>('opportunities')),
     assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
     schedulerControl: new SchedulerControlRepository(db.collection<StoredSchedulerControl>('outreach_control')),
     discoverySchedule: new AutomaticDiscoveryScheduleRepository(db.collection<StoredDiscoverySchedule>('discovery_schedule')),
@@ -727,11 +756,15 @@ export function createRepositories(db: Db): GradReachRepositories {
   };
 }
 
-/** Creates indexes for program identity and dated assessment history. */
+/** Creates the opportunity browse/deduplication indexes and dated assessment history index. */
 export async function createPhase4Indexes(db: Db): Promise<void> {
-  await db.collection<StoredProgram>('programs').createIndex(
-    { 'program.country': 1, 'program.institution': 1, 'program.name': 1 }, { name: 'programs_by_country_institution' },
-  );
+  await assertOpportunityCollectionMigrated(db);
+  const opportunities = db.collection<StoredOpportunity>('opportunities');
+  await opportunities.createIndex({ 'opportunity.type': 1, 'opportunity.country': 1, 'opportunity.institution': 1, 'opportunity.name': 1 }, { name: 'opportunities_by_type_country_identity' });
+  await opportunities.createIndex({ canonicalIdentityHash: 1 }, { name: 'opportunities_by_canonical_identity' });
+  await opportunities.createIndex({ canonicalSourceHash: 1 }, { name: 'opportunities_by_canonical_source', sparse: true });
+  await opportunities.createIndex({ canonicalIdentityClaimHash: 1 }, { name: 'opportunities_unique_identity_claim', unique: true, sparse: true });
+  await opportunities.createIndex({ canonicalSourceClaimHash: 1 }, { name: 'opportunities_unique_source_claim', unique: true, sparse: true });
   await db.collection<StoredProgramAssessment>('program_assessments').createIndex(
     { 'assessment.programId': 1, 'assessment.assessedAt': -1 }, { name: 'assessments_by_program_and_date' },
   );
@@ -771,6 +804,7 @@ export async function connectMongoStorage(
     const selectedDatabase = databaseName ?? process.env.MONGODB_DATABASE;
     const db = selectedDatabase ? client.db(selectedDatabase) : client.db();
     await assertDiscoveryCollectionsMigrated(db);
+    await assertOpportunityCollectionMigrated(db);
     return {
       client,
       repositories: createRepositories(db),
