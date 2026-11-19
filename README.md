@@ -4,7 +4,7 @@ Local research and outreach assistance for the 2027 international MSc applicatio
 
 ## Current status
 
-Core discovery, program assessment, source-cited drafts, the private website, scheduling safeguards, and Socket.IO progress have automated tests. The authorized bounded search continuation made 26 requests; 15 returned HTTP 422, and no lead passed all save checks. Gemini was not called. `npm test` passed (186 passed, one opt-in MongoDB test skipped), `npm run test:mongodb` passed against the isolated test database, and typecheck/build passed. The owner reports Gmail authorization is connected, but no email was sent; scheduled discovery and sending remain disabled. See [the phase plan](docs/implementation-plan.md) for current status and owner actions.
+Core discovery, program assessment, source-cited drafts, the private website, scheduling safeguards, and Socket.IO progress have automated tests, and `npm run typecheck` and `npm test` pass locally. The most recent authorized bounded search continuation made 26 requests; 15 returned HTTP 422, and no lead passed all save checks. Gemini was not called, and scheduled discovery and sending remain disabled. On 2026-11-11 one Gmail self-test message was delivered to the owner's own address; no professor outreach has been sent and Gmail authorization is connected only for that owner account. Reply and follow-up status is recorded manually because the permitted Gmail scope cannot read messages. See [the phase plan](docs/implementation-plan.md) for current status and owner actions.
 
 ## Requirements and local checks
 
