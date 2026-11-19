@@ -139,7 +139,7 @@ npm test
 
 | Finding | Status | Evidence |
 |---|---|---|
-| A-01 (hardcoded recipient) | **Closed** | `sendGmailSelfTest()` resolves `GRADREACH_OWNER_EMAIL`; repo-wide scan for the address in `src/`, `app/`, `test/`, `docs/`, `README.md`, `AGENTS.md` returns no hits |
+| A-01 (hardcoded recipient) | **Closed in the current tree** | `sendGmailSelfTest()` resolves `GRADREACH_OWNER_EMAIL`; a scan of `src/`, `app/`, `test/`, `docs/`, `AUDIT.md`, `README.md` and `AGENTS.md` returns no hits. The string survives in earlier commit history (see open items) |
 | A-02 (dirty tree) | **Closed** | In-flight work committed in two bounded commits; artifact directories ignored; only this log was untracked during the batch |
 | A-04 (stale status docs) | **Closed** | `README.md` status rewritten; `npm test` counts removed |
 | A-11 (triplicated daily cap) | **Closed** | One exported validator/constant set; four independent call sites still enforce it |
@@ -147,9 +147,16 @@ npm test
 ## Open items carried forward
 
 - R4–R8, R10–R12 from `AUDIT.md` are untouched by Batch 1.
+- The owner address is redacted from the current tree, but it still exists in the
+  history of the earlier audit commits (`7b56706` onward) and in the pre-fix
+  source history. Removing it from history is an owner-authorized rewrite, not a
+  Batch 1 action.
 - Integration suite still opt-in; its guarantee rests on the test as written
   unless `npm run test:mongodb` is run against a disposable database.
 - No live Brave, Gemini, Gmail, MongoDB or deployment call was made in this batch.
+- `npm run gmail:self-test` was deliberately not executed: with an owner address
+  configured it sends a real message. The missing/invalid-config branch is
+  covered by the passing unit test instead.
 
 ## Notes for the next agent
 

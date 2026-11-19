@@ -96,7 +96,7 @@ region.
 | `git diff --stat` | `18 files changed, 350 insertions(+), 142 deletions(-)` | `%TEMP%\gr-diffstat.txt` |
 | Scan `TODO|FIXME|HACK|XXX:` | 0 real markers (only a local variable named `todo`, `src/interfaces/enrich-confirmed-professors.ts:99-103`) | every `.ts`/`.tsx`/`.md`/`.json` file in the working tree |
 | Scan `@ts-ignore|@ts-expect-error|eslint-disable` | **0 results** | same scope |
-| Scan `chidozinnam` | 1 source hit + 3 hits in one private audit file | `src/infrastructure/gmail-oauth.ts:211` |
+| Scan for the owner's address | 1 source hit + 3 hits in one private audit file | `src/infrastructure/gmail-oauth.ts:211` |
 
 ### 2.3 Explicit limitations of this audit
 
@@ -279,8 +279,12 @@ risk or goal gap; **Low** = maintainability or hygiene.
 `src/infrastructure/gmail-oauth.ts:211`
 
 ```ts
-const recipient = 'chidozinnam@gmail.com';
+const recipient = '<owner-address>';
 ```
+
+(The literal address is redacted in this document. It remains present in the
+earlier audit commit `7b56706` and in the pre-fix source history; removing it
+from history requires a separate, owner-authorized rewrite.)
 
 `AGENTS.md` states: *"Do not hard-code user-specific profile data into source
 code or public planning documents."* This is exactly that. The same string also
