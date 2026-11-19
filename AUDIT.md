@@ -23,11 +23,11 @@ What the code actually delivers:
 
 - **A verified build.** `npm run typecheck` exits `0`. `npm test` exits `0` with
   **289 tests, 288 pass, 0 fail, 1 skipped** in 28.9 s (`node --experimental-strip-types --test`).
-- **A correct, double-enforced daily cap.** The cap is validated in three
-  independent places: planner (`src/application/daily-outreach-planner.ts:17`),
-  domain selection (`src/domain/outreach-queue.ts:167`), and an atomic
+- **A correct, triple-enforced daily cap.** The cap is validated in three
+  independent places: planner (`src/application/daily-outreach-planner.ts:17-18`),
+  domain selection (`src/domain/outreach-queue.ts:167-169`), and an atomic
   per-local-day reservation in MongoDB (`src/infrastructure/mongo-storage.ts:696`),
-  exercised by `test/mongo-storage.integration.test.ts:141-146` (five reservations
+  exercised by `test/mongo-storage.integration.test.ts:144-146` (five reservations
   succeed, the sixth fails, the next day succeeds).
 - **Approval integrity.** A SHA-256 fingerprint of the approved draft is stored
   at approval time (`src/application/outreach-review.ts:54`) and re-checked
