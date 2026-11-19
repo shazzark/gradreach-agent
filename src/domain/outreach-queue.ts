@@ -92,6 +92,17 @@ export interface SchedulerControl {
   dailyLimit: number;
 }
 
+/** Lower bound of the owner's configured per-local-day send cap. */
+export const MIN_DAILY_LIMIT = 1;
+/** Hard ceiling: the owner asked for a maximum of five messages per local calendar day. */
+export const MAX_DAILY_LIMIT = 5;
+export const DAILY_LIMIT_MESSAGE = `dailyLimit must be an integer from ${MIN_DAILY_LIMIT} to ${MAX_DAILY_LIMIT}`;
+
+/** Single source of truth for the daily-limit invariant; every call site still checks independently. */
+export function isValidDailyLimit(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_DAILY_LIMIT && value <= MAX_DAILY_LIMIT;
+}
+
 export interface QueueSelection {
   dateKey: string;
   limit: number;
@@ -164,9 +175,9 @@ export function selectDailyOutreachBatch(input: {
   timeZone: string;
   dailyLimit?: number;
 }): QueueSelection {
-  const limit = input.dailyLimit ?? 5;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 5) {
-    throw new Error('dailyLimit must be an integer from 1 to 5');
+  const limit = input.dailyLimit ?? MAX_DAILY_LIMIT;
+  if (!isValidDailyLimit(limit)) {
+    throw new Error(DAILY_LIMIT_MESSAGE);
   }
   const dateKey = dateKeyFor(input.now, input.timeZone);
   const countedAttempts = input.attempts.filter((attempt) =>

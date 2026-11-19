@@ -8,7 +8,7 @@ import type { DiscoveryEvidenceCheck, DiscoveryRun, DiscoverySchedule } from '..
 import type { OpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
 import { sanitizeOpportunityDiscoveryRun } from '../domain/opportunity-discovery.ts';
 import { MAX_SAVED_LEADS_PER_REPROCESS_RUN, type SavedLeadReprocessResult, type SavedLeadReprocessRun } from '../domain/saved-lead-reprocessing.ts';
-import { getLocalDateKey } from '../domain/outreach-queue.ts';
+import { DAILY_LIMIT_MESSAGE, getLocalDateKey, isValidDailyLimit } from '../domain/outreach-queue.ts';
 import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
 import { assertOpportunityCollectionMigrated, opportunityIdentityHash, opportunitySourceHash } from './opportunity-collection-migration.ts';
 import type { ConfirmedProfessor } from '../application/confirmed-professors.ts';
@@ -679,8 +679,8 @@ export class SchedulerControlRepository {
   }
 
   async save(control: SchedulerControl): Promise<void> {
-    if (!Number.isInteger(control.dailyLimit) || control.dailyLimit < 1 || control.dailyLimit > 5) {
-      throw new Error('dailyLimit must be an integer from 1 to 5');
+    if (!isValidDailyLimit(control.dailyLimit)) {
+      throw new Error(DAILY_LIMIT_MESSAGE);
     }
     if (typeof control.paused !== 'boolean') throw new Error('paused must be a boolean');
     try { new Intl.DateTimeFormat('en', { timeZone: control.timeZone }); }
@@ -700,7 +700,7 @@ export class SchedulerControlRepository {
       const stored = await this.collection.findOne({ _id: 'daily-scheduler' });
       if (!stored || stored.control.paused) return false;
       const control = stored.control;
-      if (!Number.isInteger(control.dailyLimit) || control.dailyLimit < 1 || control.dailyLimit > 5) return false;
+      if (!isValidDailyLimit(control.dailyLimit)) return false;
       const localDate = getLocalDateKey(instant.toISOString(), control.timeZone);
       if (stored.deliveryDate === localDate) {
         if (!Number.isInteger(stored.deliveryCount) || stored.deliveryCount >= control.dailyLimit) return false;

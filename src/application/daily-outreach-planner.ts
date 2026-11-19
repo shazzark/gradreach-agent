@@ -1,5 +1,5 @@
 import type { OutreachAttempt, ProfessorCandidate, QueueSelection, SchedulerControl } from '../domain/outreach-queue.ts';
-import { getLocalDateKey, selectDailyOutreachBatch } from '../domain/outreach-queue.ts';
+import { DAILY_LIMIT_MESSAGE, getLocalDateKey, isValidDailyLimit, selectDailyOutreachBatch } from '../domain/outreach-queue.ts';
 
 export interface DailyOutreachPlan {
   selection: QueueSelection;
@@ -14,8 +14,8 @@ export function planDailyOutreach(input: {
   attempts: OutreachAttempt[];
   now: string;
 }): DailyOutreachPlan {
-  if (!Number.isInteger(input.control.dailyLimit) || input.control.dailyLimit < 1 || input.control.dailyLimit > 5) {
-    throw new Error('dailyLimit must be an integer from 1 to 5');
+  if (!isValidDailyLimit(input.control.dailyLimit)) {
+    throw new Error(DAILY_LIMIT_MESSAGE);
   }
   const dateKey = getLocalDateKey(input.now, input.control.timeZone);
   if (input.control.paused) {
