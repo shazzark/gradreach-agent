@@ -105,7 +105,7 @@ test('delivery is disabled by default and never calls the provider', async () =>
   assert.equal(sends, 0);
 });
 
-test('Gmail adapter sends the approved draft through the send-only endpoint using mock transport', async () => {
+test('Gmail adapter sends the approved draft through the send endpoint using mock transport', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'gradreach-gmail-send-'));
   const tokenPath = join(folder, 'tokens.json');
   const prior = {

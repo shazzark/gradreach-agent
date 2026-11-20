@@ -82,6 +82,8 @@ export interface OutreachAttempt {
   failureCode?: string;
   replyStatus?: 'replied' | 'no-response' | 'declined';
   replyRecordedAt?: string;
+  /** Gmail message id that confirmed a reply; a header-level identifier, never message content. */
+  replyMessageId?: string;
   followUpStatus?: 'not-planned' | 'due' | 'scheduled' | 'sent' | 'closed';
   followUpScheduledFor?: string;
 }

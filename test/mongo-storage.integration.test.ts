@@ -342,6 +342,20 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.attempts.updateDelivery(sent), true);
     assert.deepEqual(await repositories.attempts.listAll(), [sent]);
     assert.deepEqual(await repositories.attempts.listForCandidate('candidate-b'), [sent]);
+    assert.equal(await repositories.attempts.recordReply({
+      candidateId: 'candidate-b', providerMessageId: 'mock-message-id', replyMessageId: 'synthetic-reply-id', repliedAt: '2026-10-19T08:05:00.000Z',
+    }), true);
+    const repliedAttempt = (await repositories.attempts.listForCandidate('candidate-b'))[0]!;
+    assert.equal(repliedAttempt.replyStatus, 'replied');
+    assert.equal(repliedAttempt.replyRecordedAt, '2026-10-19T08:05:00.000Z');
+    assert.equal(repliedAttempt.replyMessageId, 'synthetic-reply-id');
+    // A repeated sync, or a provider id that does not belong to this candidate, cannot change a recorded reply.
+    assert.equal(await repositories.attempts.recordReply({
+      candidateId: 'candidate-b', providerMessageId: 'mock-message-id', replyMessageId: 'synthetic-reply-id', repliedAt: '2026-10-19T08:06:00.000Z',
+    }), false);
+    await assert.rejects(repositories.attempts.recordReply({
+      candidateId: 'candidate-b', providerMessageId: 'mock-message-id', replyMessageId: 'synthetic-reply-id', repliedAt: 'not-a-date',
+    }), /repliedAt must be a valid date/);
     await assert.rejects(
       repositories.attempts.record({ ...attempt, scheduledFor: 'not-a-date' }),
       /attempt.scheduledFor must be a valid date/,
