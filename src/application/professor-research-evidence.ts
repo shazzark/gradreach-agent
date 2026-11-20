@@ -1,6 +1,6 @@
 import type { ProfessorCandidate } from '../domain/outreach-queue.ts';
 import type { ProfessorResearchEvidencePackage } from '../domain/professor-research-evidence.ts';
-import { OFFICIAL_HOSTS_BY_REGION, OFFICIAL_INSTITUTION_BY_REGION } from '../config/official-host-allowlist.ts';
+import { OFFICIAL_HOSTS_BY_REGION, institutionForOfficialSource } from '../config/official-host-allowlist.ts';
 import { extractOfficialPageExcerpt, extractProfessorProfileEvidence } from './research-discovery.ts';
 import { matchingResearchInterests } from '../domain/research-interest-match.ts';
 
@@ -110,7 +110,7 @@ function createPackage(input: {
   const hosts = OFFICIAL_HOSTS_BY_REGION[region as keyof typeof OFFICIAL_HOSTS_BY_REGION] ?? [];
   const exactOfficialSource = isExactOfficialSource(input.identitySourceUrl, hosts);
   const exactResearchSource = isExactOfficialSource(input.researchSourceUrl, hosts);
-  const institution = OFFICIAL_INSTITUTION_BY_REGION[region as keyof typeof OFFICIAL_INSTITUTION_BY_REGION];
+  const institution = institutionForOfficialSource(region, input.identitySourceUrl);
   const affiliationVerified = exactOfficialSource && Boolean(institution);
   const otherNamedLead = Boolean(input.researchQuote && input.professorName && researchQuoteNamesOtherLead(input.researchQuote, input.professorName));
   const quoteIsExact = Boolean(input.researchQuote && input.researchPageText.includes(input.researchQuote) && exactResearchSource && !otherNamedLead);
