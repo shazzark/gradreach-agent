@@ -628,4 +628,10 @@ npm run typecheck
   `.env`-configured test target still fails earlier, at `opportunity_collection_migration` with duplicate-key 11000 from stale
   synthetic fixtures, which is unrelated to this change. No live Gmail read, no live send, and no deployed worker were
   exercised, so this is verified logic rather than a proven live integration.
+- **Git:** branch `phase-7/gmail-reply-tracking` at `adbd76f`; direct pushes to `main` stay blocked by branch protection, so the
+  change went through PR #5 and was rebase-merged at 2026-11-20T23:25:35Z as `6143c06` (identical tree to the local commit).
+  CI: PR run `44836508486` passed both required checks — "Typecheck and unit tests" 20 s and "MongoDB integration" 45 s — and
+  the post-merge push run `44836709665` completed `success` in 46 s. Local `main` was fast-forwarded to `6143c06`; the branch
+  remains on the remote for reference.
+
 
