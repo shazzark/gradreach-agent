@@ -591,3 +591,41 @@ npm run typecheck
   commit). CI: PR run `44827557991` passed both required checks - "Typecheck and unit tests" 28 s and "MongoDB integration"
   39 s - and the post-merge push run `44827805809` completed `success` in 45 s. Local `main` was fast-forwarded to
   `8f8c763`; the branch remains on the remote for reference.
+
+## Batch 7 — R11 (Gmail Reply Tracking)
+
+- **What changed:** A-05 said reply tracking is manual by design because the granted scope was send-only. The owner enabled the
+  restricted `gmail.readonly` scope in the Google Cloud Console, so this batch adds the read-only, header-only reply pass and
+  the OAuth consent that supports it.
+  - `src/infrastructure/gmail-oauth.ts` adds `GMAIL_READONLY_SCOPE`, `GMAIL_REQUESTED_SCOPES`, `hasGmailScope`,
+    `GmailTokenScopeError`, and `gmailReadOnlyAccessToken`. Authorization now asks for `gmail.send` plus `gmail.readonly` and
+    rejects a grant that omits either; `readTokens` still accepts a legacy send-only token so delivery is unchanged, and only
+    the sync demands the read scope. No `gmail.modify` or delete scope is requested.
+  - `src/infrastructure/gmail-reply-sync.ts` (new) calls the Gmail REST API with `fetch` (no new dependency):
+    `/profile`, `/messages/{id}?format=minimal&fields=threadId`, and
+    `/threads/{id}?format=metadata&metadataHeaders=From`. It requests no subject and no body, validates every provider id
+    before it enters a URL, sends GET requests only, and maps failures to sanitized codes that carry no provider payload.
+  - `GmailReplySyncService` marks an attempt `replied` only when a message in that send's thread is not the sent message, is
+    not `SENT`-labelled, is not from the authenticated owner address, and — when both timestamps exist — arrived after
+    `sentAt`. `pendingReplyAttempts` skips attempts already `replied` or manually `declined`, and a run with nothing pending
+    makes no mailbox call at all. A `401`/`403` stops the run instead of retrying every remaining thread.
+  - `OutreachAttemptRepository.recordReply` (Mongo) writes `replyStatus: 'replied'`, `replyRecordedAt`, and the new optional
+    `replyMessageId` in one guarded update, so a repeated sync is a no-op and a manual `declined` decision is never
+    overwritten. `OutreachAttempt.replyMessageId` is the only model change; sending, the five-per-day cap, pause control, and
+    approval gates are untouched.
+  - `docs/phase-7-gmail-reply-sync.md` (new) is the R11 decision record: separate read consent, exactly which fields are read,
+    retention, prompt-injection stance, failure limits, and what remains unimplemented. README,
+    `docs/implementation-plan.md`, and `docs/private-website-deployment.md` no longer claim the app cannot read replies.
+- **New npm script:** `npm run outreach:sync-replies` (`src/interfaces/gmail-reply-sync.ts`) performs one pass, prints
+  aggregate counts and codes only (never a sender address, subject, or body), and exits non-zero on `failed` or `partial`.
+- **Verification:** `npm run typecheck` exit 0. `npm test` 340 tests, 339 pass, 0 fail, 1 opt-in MongoDB skip.
+  `test/gmail-reply-sync.test.ts` (new) drives a mocked Gmail API and a fake repository through reply, owner-message,
+  pre-send message, missing `From`, manual `declined`, missing scope, `401`, `429`, vanished-thread, and per-run-limit cases,
+  and asserts that every request is a GET with `format=minimal`/`format=metadata` and no subject or body parameter.
+  `test/provider-integrations.test.ts` now asserts the combined scope request, rejection of a send-only grant, and that a
+  stored send-only token is refused by `gmailReadOnlyAccessToken` without rewriting the token file. `npm run test:mongodb`
+  passed `recordReply`'s write, idempotency, and invalid-timestamp assertions against a clean local `gradreach_test`; the
+  `.env`-configured test target still fails earlier, at `opportunity_collection_migration` with duplicate-key 11000 from stale
+  synthetic fixtures, which is unrelated to this change. No live Gmail read, no live send, and no deployed worker were
+  exercised, so this is verified logic rather than a proven live integration.
+

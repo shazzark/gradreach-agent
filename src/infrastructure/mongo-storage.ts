@@ -550,6 +550,37 @@ export class OutreachAttemptRepository {
     });
     return result.modifiedCount === 1;
   }
+
+  /**
+   * Records a header-only reply confirmation for the sent attempt carrying this provider message id.
+   * The guard leaves a manual `declined` decision untouched and makes a repeated sync a no-op.
+   */
+  async recordReply(input: {
+    candidateId: string;
+    providerMessageId: string;
+    replyMessageId: string;
+    repliedAt: string;
+  }): Promise<boolean> {
+    const repliedAt = new Date(input.repliedAt);
+    if (Number.isNaN(repliedAt.getTime())) throw new Error('repliedAt must be a valid date');
+    if (!input.providerMessageId.trim() || !input.replyMessageId.trim()) {
+      throw new Error('providerMessageId and replyMessageId are required');
+    }
+    const result = await this.collection.updateOne({
+      'attempt.candidateId': input.candidateId,
+      'attempt.providerMessageId': input.providerMessageId,
+      'attempt.state': 'sent',
+      $or: [{ 'attempt.replyStatus': 'no-response' }, { 'attempt.replyStatus': { $exists: false } }],
+    }, {
+      $set: {
+        'attempt.replyStatus': 'replied',
+        'attempt.replyRecordedAt': repliedAt.toISOString(),
+        'attempt.replyMessageId': input.replyMessageId,
+        updatedAt: repliedAt,
+      },
+    });
+    return result.modifiedCount === 1;
+  }
 }
 
 export class OpportunityRepository {

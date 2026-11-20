@@ -37,6 +37,7 @@
     "db:migrate-discovery": "node --experimental-strip-types src/interfaces/migrate-discovery-collections.ts",
     "gmail:connect": "node --experimental-strip-types src/interfaces/gmail-connect.ts",
     "gmail:self-test": "node --experimental-strip-types src/interfaces/gmail-selftest.ts",
+    "outreach:sync-replies": "node --experimental-strip-types src/interfaces/gmail-reply-sync.ts",
     "outreach:scheduler": "node --experimental-strip-types src/interfaces/outreach-scheduler.ts",
     "discovery:scheduler": "node --experimental-strip-types src/interfaces/discovery-scheduler.ts"
   },

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { beginGmailAuthorization, GMAIL_SEND_SCOPE, sendGmailSelfTest } from '../src/infrastructure/gmail-oauth.ts';
+import { beginGmailAuthorization, gmailReadOnlyAccessToken, GMAIL_READONLY_SCOPE, GMAIL_REQUESTED_SCOPES, GMAIL_SEND_SCOPE, hasGmailScope, sendGmailSelfTest } from '../src/infrastructure/gmail-oauth.ts';
 import { GeminiDraftProvider } from '../src/infrastructure/gemini-draft-provider.ts';
 
 test('Gmail self-test refuses to run without a configured owner address', async () => {
@@ -21,7 +21,7 @@ test('Gmail self-test refuses to run without a configured owner address', async 
   }
 });
 
-test('Gmail OAuth asks for send-only scope and stores callback tokens with owner-only mode', async () => {
+test('Gmail OAuth asks for send and read-only scopes and stores callback tokens with owner-only mode', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-'));
   const tokenPath = join(folder, 'tokens.json');
   try {
@@ -31,12 +31,13 @@ test('Gmail OAuth asks for send-only scope and stores callback tokens with owner
         const body = new URLSearchParams(String(init?.body));
         assert.equal(body.get('grant_type'), 'authorization_code');
         assert.ok(body.get('code_verifier'));
-        return Response.json({ access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token', expires_in: 3600, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer' });
+        return Response.json({ access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token', expires_in: 3600, scope: GMAIL_REQUESTED_SCOPES, token_type: 'Bearer' });
       },
     });
     try {
       const authorizationUrl = new URL(flow.authorizationUrl);
-      assert.equal(authorizationUrl.searchParams.get('scope'), GMAIL_SEND_SCOPE);
+      assert.equal(authorizationUrl.searchParams.get('scope'), GMAIL_REQUESTED_SCOPES);
+      assert.ok(authorizationUrl.searchParams.get('scope')?.includes(GMAIL_READONLY_SCOPE));
       assert.equal(authorizationUrl.searchParams.get('code_challenge_method'), 'S256');
       const callbackUri = new URL(authorizationUrl.searchParams.get('redirect_uri')!);
       const callbackResponse = await fetch(`${callbackUri.origin}/oauth2callback?code=synthetic-code&state=${authorizationUrl.searchParams.get('state')}`);
@@ -44,7 +45,7 @@ test('Gmail OAuth asks for send-only scope and stores callback tokens with owner
       await flow.complete;
       const saved = JSON.parse(await readFile(tokenPath, 'utf8')) as { access_token: string; scope: string };
       assert.equal(saved.access_token, 'synthetic-access-token');
-      assert.equal(saved.scope, GMAIL_SEND_SCOPE);
+      assert.equal(saved.scope, GMAIL_REQUESTED_SCOPES);
       if (platform() !== 'win32') assert.equal((await stat(tokenPath)).mode & 0o777, 0o600);
       else assert.ok((await stat(tokenPath)).isFile());
     } finally { await flow.close(); }
@@ -63,12 +64,12 @@ test('Gmail OAuth refuses to save an access-only token that cannot support sched
   try {
     const flow = await beginGmailAuthorization({
       clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret', tokenPath,
-      fetchImpl: async () => Response.json({ access_token: 'synthetic-access-token', expires_in: 3600, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer' }),
+      fetchImpl: async () => Response.json({ access_token: 'synthetic-access-token', expires_in: 3600, scope: GMAIL_REQUESTED_SCOPES, token_type: 'Bearer' }),
     });
     try {
       const url = new URL(flow.authorizationUrl);
       const redirect = new URL(url.searchParams.get('redirect_uri')!);
-      const completionFailure = assert.rejects(flow.complete, /send-only scope.*refresh capability/);
+      const completionFailure = assert.rejects(flow.complete, /send and read-only scopes.*refresh capability/);
       await fetch(`${redirect.origin}/oauth2callback?code=synthetic-code&state=${url.searchParams.get('state')}`);
       await completionFailure;
       await assert.rejects(readFile(tokenPath), { code: 'ENOENT' });
@@ -76,22 +77,41 @@ test('Gmail OAuth refuses to save an access-only token that cannot support sched
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
-test('Gmail OAuth rejects and does not store an expanded scope set', async () => {
+test('Gmail OAuth rejects and does not store a token without the read-only scope', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-scope-'));
   const tokenPath = join(folder, 'tokens.json');
   try {
     const flow = await beginGmailAuthorization({
       clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret', tokenPath,
-      fetchImpl: async () => Response.json({ access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token', expires_in: 3600, scope: `${GMAIL_SEND_SCOPE} https://www.googleapis.com/auth/gmail.readonly`, token_type: 'Bearer' }),
+      fetchImpl: async () => Response.json({ access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token', expires_in: 3600, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer' }),
     });
     try {
       const url = new URL(flow.authorizationUrl);
       const redirect = new URL(url.searchParams.get('redirect_uri')!);
-      const completionFailure = assert.rejects(flow.complete, /send-only scope/);
+      const completionFailure = assert.rejects(flow.complete, /send and read-only scopes/);
       await fetch(`${redirect.origin}/oauth2callback?code=synthetic-code&state=${url.searchParams.get('state')}`);
       await completionFailure;
       await assert.rejects(readFile(tokenPath), { code: 'ENOENT' });
     } finally { await flow.close(); }
+  } finally { await rm(folder, { recursive: true, force: true }); }
+});
+
+test('Gmail read token refuses a send-only authorization without rewriting the token file', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'gradreach-oauth-read-scope-'));
+  const tokenPath = join(folder, 'tokens.json');
+  const stored = {
+    access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token',
+    expires_at: Date.now() + 3_600_000, scope: GMAIL_SEND_SCOPE, token_type: 'Bearer',
+  };
+  try {
+    assert.equal(hasGmailScope(GMAIL_REQUESTED_SCOPES, GMAIL_READONLY_SCOPE), true);
+    assert.equal(hasGmailScope(GMAIL_SEND_SCOPE, GMAIL_READONLY_SCOPE), false);
+    await writeFile(tokenPath, `${JSON.stringify(stored)}\n`, 'utf8');
+    await assert.rejects(
+      gmailReadOnlyAccessToken({ tokenPath, clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret' }),
+      /missing the https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly scope; run npm run gmail:connect again/,
+    );
+    assert.deepEqual(JSON.parse(await readFile(tokenPath, 'utf8')), stored);
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 

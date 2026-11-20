@@ -12,6 +12,10 @@ import { validateOutreachDraft, type OutreachDraft } from '../application/outrea
 import { draftFingerprint } from '../application/outreach-review.ts';
 
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+/** Read-only mailbox scope; used only to confirm that a reply exists in a thread this agent started. */
+export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+/** Scopes requested at authorization: scheduled sending plus header-only reply detection. */
+export const GMAIL_REQUESTED_SCOPES = `${GMAIL_SEND_SCOPE} ${GMAIL_READONLY_SCOPE}`;
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +25,22 @@ interface GmailTokenSet {
   expires_at: number;
   scope?: string;
   token_type: 'Bearer';
+}
+
+/** True when a granted scope string contains the exact required scope. */
+export function hasGmailScope(granted: string | undefined, required: string): boolean {
+  return (granted ?? '').split(/\s+/).includes(required);
+}
+
+/** Raised when the stored token was authorized before a scope this operation needs was requested. */
+export class GmailTokenScopeError extends Error {
+  readonly requiredScope: string;
+
+  constructor(requiredScope: string) {
+    super(`Gmail authorization is missing the ${requiredScope} scope; run npm run gmail:connect again`);
+    this.name = 'GmailTokenScopeError';
+    this.requiredScope = requiredScope;
+  }
 }
 
 function requiredEnv(name: string): string {
@@ -74,8 +94,9 @@ async function readTokens(path: string): Promise<GmailTokenSet> {
   try {
     const parsed = JSON.parse(await readFile(resolve(path), 'utf8')) as Partial<GmailTokenSet>;
     if (typeof parsed.access_token !== 'string' || typeof parsed.refresh_token !== 'string' || !parsed.refresh_token ||
-        typeof parsed.expires_at !== 'number' || parsed.token_type !== 'Bearer') throw new Error();
-    if (parsed.scope !== GMAIL_SEND_SCOPE) throw new Error();
+        typeof parsed.expires_at !== 'number' || parsed.token_type !== 'Bearer' || typeof parsed.scope !== 'string') throw new Error();
+    // Sending still works with a token that predates the read-only scope; reply sync checks the read scope itself.
+    if (!hasGmailScope(parsed.scope, GMAIL_SEND_SCOPE)) throw new Error();
     return parsed as GmailTokenSet;
   } catch {
     throw new Error('Gmail token file is missing or invalid; authorize Gmail again');
@@ -120,7 +141,7 @@ export async function beginGmailAuthorization(options: {
   const redirectUri = `http://127.0.0.1:${address.port}/oauth2callback`;
   const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authorizationUrl.search = new URLSearchParams({
-    client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: GMAIL_SEND_SCOPE,
+    client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: GMAIL_REQUESTED_SCOPES,
     access_type: 'offline', prompt: 'consent', state, code_challenge: challenge, code_challenge_method: 'S256',
   }).toString();
   const complete = (async () => {
@@ -134,8 +155,9 @@ export async function beginGmailAuthorization(options: {
       if (!response.ok) throw new Error(`Gmail OAuth token exchange failed with HTTP ${response.status}`);
       const payload = await response.json() as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; scope?: unknown; token_type?: unknown };
       if (typeof payload.access_token !== 'string' || typeof payload.refresh_token !== 'string' || !payload.refresh_token ||
-          typeof payload.expires_in !== 'number' || payload.token_type !== 'Bearer' || payload.scope !== GMAIL_SEND_SCOPE) {
-        throw new Error('Gmail OAuth response did not grant the required send-only scope with refresh capability');
+          typeof payload.expires_in !== 'number' || payload.token_type !== 'Bearer' || typeof payload.scope !== 'string' ||
+          !hasGmailScope(payload.scope, GMAIL_SEND_SCOPE) || !hasGmailScope(payload.scope, GMAIL_READONLY_SCOPE)) {
+        throw new Error('Gmail OAuth response did not grant the send and read-only scopes with refresh capability');
       }
       await saveTokens(tokenPath, {
         access_token: payload.access_token,
@@ -149,8 +171,15 @@ export async function beginGmailAuthorization(options: {
   return { authorizationUrl: authorizationUrl.toString(), complete, close: () => new Promise<void>((resolvePromise) => server.close(() => resolvePromise())) };
 }
 
-async function accessToken(path: string, clientId: string, clientSecret: string, fetchImpl: typeof fetch): Promise<string> {
+async function accessToken(
+  path: string,
+  clientId: string,
+  clientSecret: string,
+  fetchImpl: typeof fetch,
+  requiredScope: string = GMAIL_SEND_SCOPE,
+): Promise<string> {
   const tokens = await readTokens(path);
+  if (!hasGmailScope(tokens.scope, requiredScope)) throw new GmailTokenScopeError(requiredScope);
   if (tokens.expires_at > Date.now() + 60_000) return tokens.access_token;
   const response = await fetchImpl(TOKEN_URL, {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
@@ -163,6 +192,22 @@ async function accessToken(path: string, clientId: string, clientSecret: string,
   const refreshed = { ...tokens, access_token: payload.access_token, expires_at: Date.now() + payload.expires_in * 1000 };
   await saveTokens(path, refreshed);
   return refreshed.access_token;
+}
+
+/**
+ * Returns an access token for header-only reply checks. A token authorized before the read-only scope was requested is
+ * refused, so the caller can ask the owner to re-run `npm run gmail:connect` instead of receiving an opaque 403.
+ */
+export async function gmailReadOnlyAccessToken(options: {
+  tokenPath?: string;
+  clientId?: string;
+  clientSecret?: string;
+  fetchImpl?: typeof fetch;
+} = {}): Promise<string> {
+  const tokenPath = options.tokenPath ?? process.env.EMAIL_PROVIDER_TOKEN_PATH ?? 'private-data/gmail-token.json';
+  const clientId = options.clientId ?? requiredEnv('EMAIL_PROVIDER_CLIENT_ID');
+  const clientSecret = options.clientSecret ?? requiredEnv('EMAIL_PROVIDER_CLIENT_SECRET');
+  return accessToken(tokenPath, clientId, clientSecret, options.fetchImpl ?? fetch, GMAIL_READONLY_SCOPE);
 }
 
 interface GmailMessage {

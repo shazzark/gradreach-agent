@@ -49,7 +49,7 @@ Ensure the `gradreach` database already contains the `primary` applicant profile
 
 ## Gmail remains separate
 
-Website Google sign-in requests only identity scopes. It does not connect Gmail, receive Gmail tokens, or enable delivery. The existing local Gmail connection uses its separate Desktop OAuth client, the `gmail.send` scope, state/PKCE checks, and the private local token file. Complete `npm run gmail:connect` locally in the owner browser when ready. That existing token file is not automatically deployed or copied to the website.
+Website Google sign-in requests only identity scopes. It does not connect Gmail, receive Gmail tokens, or enable delivery. The existing local Gmail connection uses its separate Desktop OAuth client, the `gmail.send` and `gmail.readonly` scopes, state/PKCE checks, and the private local token file. Complete `npm run gmail:connect` locally in the owner browser when ready. That existing token file is not automatically deployed or copied to the website, and `npm run outreach:sync-replies` runs only on the owner's machine.
 
 The website can review drafts, record explicit approval, plan queue rows, pause the queue, and display delivery status. It has no direct email-send action. `npm run outreach:scheduler` is a long-running worker, not a Next.js serverless request; do not deploy it as a web function. Any later production sender needs its own approved hosting and secure Gmail-token design. Keep sending disabled until that is deliberately implemented and explicitly authorized. No real email is sent by website sign-in, approval, or queue planning.
 
