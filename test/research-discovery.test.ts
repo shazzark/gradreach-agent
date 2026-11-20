@@ -5,7 +5,7 @@ import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import { discoverProfessorCandidates, fetchOfficialPage, markCandidateEvidenceReviewed, MAX_SAME_HOST_PROFILE_PAGES_PER_DIRECTORY, MAX_LINKED_RESEARCH_PAGES_PER_PROFILE } from '../src/application/research-discovery.ts';
 import { BraveSearchProvider } from '../src/infrastructure/brave-search-provider.ts';
 import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
-import { SanitizedIntegrationError, safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
+import { failureForHttpStatus, SanitizedIntegrationError, safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import { prepareSavedProfessorEvidence } from '../src/application/professor-research-evidence.ts';
 
 const profile = parseApplicantProfile({
@@ -479,7 +479,7 @@ test('Brave failures record safe categories and redact keys, raw errors, and res
   const rateLimitedProvider = new BraveSearchProvider(secret, async () => new Response(`private response ${secret}`, {
     status: 429,
     headers: { 'content-type': 'application/json' },
-  }));
+  }), async () => {});
   await assert.rejects(rateLimitedProvider.search('synthetic query'), (error: unknown) => {
     assert.ok(error instanceof SanitizedIntegrationError);
     assert.deepEqual(error.failure, {
@@ -1435,3 +1435,44 @@ test('discovery target must be from one through 200', async () => {
     options: { officialHostsByRegion: {}, targetPoolSize: 201 },
   }), /targetPoolSize must be an integer from 1 to 200/);
 });
+test('a provider validation failure is recorded as a search failure before the run aborts', async () => {
+  const diagnostics: Array<{ stage?: string; country: string; hostname: string | null; outcome: string; rejectionReasons: string[]; targetingMode?: string; statusCode?: number; braveErrorCode?: string; braveErrorId?: string; requestId?: string }> = [];
+  const saved: ProfessorCandidate[] = [];
+  await assert.rejects(discoverProfessorCandidates({
+    profile,
+    provider: {
+      async search() {
+        throw failureForHttpStatus(422, undefined, {
+          responseReceived: true, statusCode: 422, braveErrorCode: 'VALIDATION', braveErrorId: 'occurrence-422', requestId: 'transport-422',
+        });
+      },
+    },
+    repository: { async list() { return []; }, async save(candidate) { saved.push(candidate); } },
+    options: {
+      officialHostsByRegion: { 'Country A': ['www.countrya.edu'] },
+      maxSearches: 1,
+      resultsPerQuery: 3,
+      onResultDiagnostic: (diagnostic) => { diagnostics.push(diagnostic); },
+    },
+  }), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.statusCode, 422);
+    return true;
+  });
+
+  assert.deepEqual(diagnostics, [{
+    stage: 'brave_search',
+    country: 'Country A',
+    hostname: null,
+    outcome: 'search_failed',
+    rejectionReasons: ['http_status'],
+    targetingMode: 'query_and_host',
+    statusCode: 422,
+    braveErrorCode: 'VALIDATION',
+    braveErrorId: 'occurrence-422',
+    requestId: 'transport-422',
+  }]);
+  assert.equal(saved.length, 0);
+  assert.equal(JSON.stringify(diagnostics).includes('synthetic'), false);
+});
+

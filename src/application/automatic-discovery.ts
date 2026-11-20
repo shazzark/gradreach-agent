@@ -98,6 +98,23 @@ export const DEFAULT_DISCOVERY_SCHEDULE: DiscoverySchedule = {
 };
 export const DISCOVERY_LIMITS = { searchesPerRun: 1, resultsPerSearch: 3, inspectionsPerRun: 5 } as const;
 
+// Search-provider failure kinds. They are named for the owner instead of being reported as a bare
+// transport code, so a failed request never looks like a run that simply found nothing.
+const PROVIDER_FAILURE_KINDS = new Set(['http_status', 'rate_limited', 'network_error', 'timeout', 'dns_tls', 'invalid_content']);
+
+export function discoveryFailureCode(kind: string, observedProviderKind?: string): string {
+  const effective = observedProviderKind ?? kind;
+  if (!PROVIDER_FAILURE_KINDS.has(effective)) return kind;
+  return effective === 'rate_limited' ? 'provider_rate_limited' : 'provider_error';
+}
+
+/** Owner-facing wording for a run failure code. */
+export function discoveryRunFailureLabel(code: string): string {
+  if (code === 'provider_rate_limited') return 'Provider rate limited/error (HTTP 429)';
+  if (code === 'provider_error') return 'Provider rate limited/error';
+  return code;
+}
+
 export function validateDiscoverySchedule(value: DiscoverySchedule, configuredCountries: string[]): DiscoverySchedule {
   if (typeof value.enabled !== 'boolean' || typeof value.paused !== 'boolean') throw new Error('enabled and paused must be booleans');
   if (value.sweepOnce !== undefined && typeof value.sweepOnce !== 'boolean') throw new Error('sweepOnce must be a boolean');
@@ -238,6 +255,7 @@ async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: stri
     try { input.onProgress?.(progressEvent(runId, state, stage, completed, total)); } catch { /* Progress listeners cannot change the persisted job outcome. */ }
   };
   let targetingMode: DiscoveryRun['targetingMode'];
+  let providerFailureKind: string | undefined;
   let searchesStarted = 0;
   const resultDiagnostics: DiscoveryResultDiagnostic[] = [];
   let researchInterests: string[] = [];
@@ -273,6 +291,10 @@ async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: stri
         maxPagesPerQuery: 1,
         onSearchTargeting: async (target) => { targetingMode = target.mode; searchesStarted += 1; counts.searches = searchesStarted; await persistProgress(); },
         onResultDiagnostic: async (diagnostic: Phase3ResultDiagnostic) => {
+          if (diagnostic.outcome === 'search_failed') {
+            providerFailureKind ??= diagnostic.rejectionReasons.includes('rate_limited') ? 'rate_limited' : 'http_status';
+            return;
+          }
           if (diagnostic.outcome === 'search_started' || diagnostic.outcome === 'redirect_followed' || resultDiagnostics.length >= DISCOVERY_LIMITS.resultsPerSearch) return;
           const resultNumber = diagnostic.resultNumber ?? resultDiagnostics.length + 1;
           const safeDiagnostic = storedDiscoveryResultDiagnostic(diagnostic, resultNumber);
@@ -347,7 +369,7 @@ async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: stri
   } catch (error) {
     const failure = safeFailureRecord(error);
     const failed = { ...run, ...(targetingMode ? { targetingMode } : {}), state: 'failed' as const,
-      completedAt: new Date().toISOString(), failureCode: failure.kind, counts: { ...counts, searches: searchesStarted }, resultDiagnostics };
+      completedAt: new Date().toISOString(), failureCode: discoveryFailureCode(failure.kind, providerFailureKind), counts: { ...counts, searches: searchesStarted }, resultDiagnostics };
     await input.repositories.runs.finish(failed);
     publish('failed', 'failed', 1, 1);
     return failed;

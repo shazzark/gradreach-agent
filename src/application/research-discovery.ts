@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ApplicantProfile } from '../domain/applicant-profile.ts';
 import type { DiscoveryEvidence, ProfessorCandidate } from '../domain/outreach-queue.ts';
-import { diagnosticResultHostname, isVerifiedBraveCountryCode, type RejectedSearchResultChecks, type SearchProvider, type SearchResult } from '../infrastructure/brave-search-provider.ts';
+import { diagnosticResultHostname, isVerifiedBraveCountryCode, type RejectedSearchResultChecks, type SearchPage, type SearchProvider, type SearchResult } from '../infrastructure/brave-search-provider.ts';
 import type { Phase3ResultDiagnostic, ProfessorTraversalDiagnostics } from '../infrastructure/phase3-pilot-diagnostics.ts';
 import { failureForHttpStatus, safeFailureRecord, sanitizedIntegrationError, SanitizedIntegrationError, type SafeFailureRecord, type SafeResponseDiagnostics } from '../infrastructure/sanitized-failure.ts';
 
@@ -11,6 +11,12 @@ const PUBLIC_SUFFIXES = new Set([
   'ac.jp', 'co.jp', 'go.jp', 'or.jp', 'com.au', 'edu.au', 'gov.au', 'net.au', 'org.au',
   'ac.nz', 'co.nz', 'govt.nz', 'net.nz', 'org.nz', 'com.br', 'edu.br', 'gov.br', 'org.br',
   'com.cn', 'edu.cn', 'gov.cn', 'net.cn', 'org.cn', 'ac.in', 'co.in', 'edu.in', 'gov.in', 'net.in', 'org.in',
+]);
+
+// Only known provider/transport kinds may be written into a search diagnostic record.
+const SEARCH_FAILURE_REASONS = new Set([
+  'http_status', 'rate_limited', 'network_error', 'timeout', 'dns_tls', 'invalid_content',
+  'invalid_request', 'missing_configuration',
 ]);
 
 export interface CandidateDiscoveryRepository {
@@ -871,9 +877,31 @@ export async function discoverProfessorCandidates(input: {
           ...(input.options.onRejectedResult || input.options.onResultDiagnostic ? { onRejectedResult: recordRejection } : {}),
         };
         searches += 1;
-        const page = input.provider.searchPage
-          ? await input.provider.searchPage(query, searchOptions)
-          : { results: await input.provider.search(query, searchOptions), moreResultsAvailable: false, paginationKnown: true };
+        let page: SearchPage;
+        try {
+          page = input.provider.searchPage
+            ? await input.provider.searchPage(query, searchOptions)
+            : { results: await input.provider.search(query, searchOptions), moreResultsAvailable: false, paginationKnown: true };
+        } catch (error) {
+          // A search failure aborts this run, so record its sanitized provider status first; otherwise
+          // the run just looks empty.
+          const failure = safeFailureRecord(error);
+          if (SEARCH_FAILURE_REASONS.has(failure.kind)) {
+            await input.options.onResultDiagnostic?.({
+              stage: 'brave_search',
+              country: region,
+              hostname: null,
+              outcome: 'search_failed',
+              rejectionReasons: [failure.kind],
+              targetingMode,
+              ...(failure.statusCode ? { statusCode: failure.statusCode } : {}),
+              ...(failure.braveErrorCode ? { braveErrorCode: failure.braveErrorCode } : {}),
+              ...(failure.braveErrorId ? { braveErrorId: failure.braveErrorId } : {}),
+              ...(failure.requestId ? { requestId: failure.requestId } : {}),
+            });
+          }
+          throw error;
+        }
         const results = page.results;
         resultCount += results.length;
         pagesFetched += 1;

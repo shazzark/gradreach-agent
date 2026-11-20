@@ -155,6 +155,7 @@ export async function runDiscoveryAction(form: FormData): Promise<never> {
           onSearchTargeting: ({ country, mode }) => appendPhase3ResultDiagnostic({
             stage: 'brave_search', country, hostname: null, outcome: 'search_started', rejectionReasons: [], targetingMode: mode,
           }),
+          onResultDiagnostic: (diagnostic) => appendPhase3ResultDiagnostic(diagnostic),
           shouldSaveCandidate: (candidate) => prepareSavedProfessorEvidence({
             candidate,
             researchInterests: [...profile.applicant.target.researchInterests, ...profile.applicant.target.fields],

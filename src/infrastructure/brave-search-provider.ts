@@ -67,6 +67,30 @@ export function isVerifiedBraveCountryCode(value: string | undefined): value is 
   return Boolean(value && (VERIFIED_BRAVE_COUNTRY_CODES as readonly string[]).includes(value.toUpperCase()));
 }
 
+/**
+ * Brave validates `country` against a closed enum and answers HTTP 422 (code `VALIDATION`) for any
+ * other two-letter value. The members below are the exact enum returned by the live API on
+ * 2026-11-20 and are recorded in `docs/phase-6-brave-422-diagnosis.md`. The provider never sends a
+ * value outside this list, so an unlisted region keeps its query-and-host targeting instead of
+ * failing the whole run.
+ */
+export const BRAVE_SUPPORTED_COUNTRY_CODES = [
+  'AR', 'AU', 'AT', 'BE', 'BR', 'CA', 'CL', 'DK', 'FI', 'FR', 'DE', 'GR', 'HK', 'IN', 'ID', 'IT',
+  'JP', 'KR', 'MY', 'MX', 'NL', 'NZ', 'NO', 'CN', 'PL', 'PT', 'PH', 'RU', 'SA', 'ZA', 'ES', 'SE',
+  'CH', 'TW', 'TR', 'GB', 'US',
+] as const;
+
+export function isBraveSupportedCountryCode(value: string | undefined): value is typeof BRAVE_SUPPORTED_COUNTRY_CODES[number] {
+  return Boolean(value && (BRAVE_SUPPORTED_COUNTRY_CODES as readonly string[]).includes(value.toUpperCase()));
+}
+
+// Brave retries are limited to provider-side availability signals. A 422 is a deterministic
+// validation failure, so repeating it would only spend quota.
+const RETRYABLE_BRAVE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const MAX_BRAVE_ATTEMPTS = 3;
+const BRAVE_RETRY_BASE_DELAY_MS = 1_000;
+const BRAVE_RETRY_MAX_DELAY_MS = 10_000;
+
 export interface SearchProvider {
   readonly providerName?: string;
   search(query: string, options?: SearchOptions): Promise<SearchResult[]>;
@@ -83,10 +107,16 @@ export class BraveSearchProvider implements SearchProvider {
   readonly providerName = 'brave';
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
+  private readonly sleepMs: (milliseconds: number) => Promise<void>;
 
-  constructor(apiKey = process.env.SEARCH_PROVIDER_API_KEY, fetchImpl: typeof fetch = fetch) {
+  constructor(
+    apiKey = process.env.SEARCH_PROVIDER_API_KEY,
+    fetchImpl: typeof fetch = fetch,
+    sleepMs: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  ) {
     this.apiKey = apiKey;
     this.fetchImpl = fetchImpl;
+    this.sleepMs = sleepMs;
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
@@ -106,18 +136,18 @@ export class BraveSearchProvider implements SearchProvider {
     if (!Number.isInteger(offset) || offset < 0 || offset > 9) throw new SanitizedIntegrationError('invalid_request');
     url.searchParams.set('offset', String(offset));
     url.searchParams.set('safesearch', 'strict');
-    if (options.countryCode) {
-      if (!/^[A-Za-z]{2}$/.test(options.countryCode)) throw new SanitizedIntegrationError('invalid_request');
-      url.searchParams.set('country', options.countryCode.toUpperCase());
-    }
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, {
-        headers: { Accept: 'application/json', 'X-Subscription-Token': this.apiKey },
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (error) {
-      throw sanitizedIntegrationError(error);
+    const requestedCountryCode = options.countryCode?.toUpperCase();
+    // Sending an unlisted country value is the confirmed cause of Brave's HTTP 422 responses, so it
+    // is omitted rather than forwarded.
+    const appliedCountryCode = isBraveSupportedCountryCode(requestedCountryCode) ? requestedCountryCode : undefined;
+    if (appliedCountryCode) url.searchParams.set('country', appliedCountryCode);
+    let attempt = 1;
+    let response = await this.sendRequest(url, this.apiKey);
+    while (!response.ok && RETRYABLE_BRAVE_STATUS_CODES.has(response.status) && attempt < MAX_BRAVE_ATTEMPTS) {
+      try { await response.body?.cancel(); } catch { /* Discard the rejected body before retrying. */ }
+      await this.sleepMs(this.retryDelayMs(response, attempt));
+      attempt += 1;
+      response = await this.sendRequest(url, this.apiKey);
     }
     let responseDetails = safeBraveResponseDiagnostics(
       response,
@@ -182,9 +212,27 @@ export class BraveSearchProvider implements SearchProvider {
         offset,
         paginationKnown,
         moreResultsAvailable: moreResultsAvailable === true,
-        ...(options.countryCode ? { countryCode: options.countryCode.toUpperCase() } : {}),
+        ...(appliedCountryCode ? { countryCode: appliedCountryCode } : {}),
         ...(options.targetingMode ? { targetingMode: options.targetingMode } : {}),
       },
     };
+  }
+
+  /** Honors `Retry-After` seconds when Brave sends it, otherwise backs off 1s, 2s, and so on. */
+  private retryDelayMs(response: Response, attempt: number): number {
+    const retryAfter = response.headers.get('retry-after')?.trim();
+    const retryAfterMs = retryAfter && /^\d{1,3}$/.test(retryAfter) ? Number(retryAfter) * 1_000 : undefined;
+    return Math.min(BRAVE_RETRY_MAX_DELAY_MS, retryAfterMs ?? BRAVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  }
+
+  private async sendRequest(url: URL, token: string): Promise<Response> {
+    try {
+      return await this.fetchImpl(url, {
+        headers: { Accept: 'application/json', 'X-Subscription-Token': token },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error) {
+      throw sanitizedIntegrationError(error);
+    }
   }
 }

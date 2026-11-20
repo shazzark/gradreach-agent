@@ -67,7 +67,7 @@ test('provider contract filters incomplete object results through the rejection 
 });
 
 test('provider errors expose sanitized status metadata only', async () => {
-  const provider = new BraveSearchProvider('fixture-only-key', async () => new Response('private fixture-only-key body', { status: 503 }));
+  const provider = new BraveSearchProvider('fixture-only-key', async () => new Response('private fixture-only-key body', { status: 503 }), async () => {});
   await assert.rejects(provider.searchPage('fixture query', { count: 2 }), (error: unknown) => {
     assert.ok(error instanceof SanitizedIntegrationError);
     assert.equal(error.failure.kind, 'http_status');
@@ -76,6 +76,91 @@ test('provider errors expose sanitized status metadata only', async () => {
     assert.equal(JSON.stringify(error.failure).includes('fixture query'), false);
     return true;
   });
+});
+
+test('provider omits a country value outside the documented Brave enum', async () => {
+  let requested = '';
+  const provider = new BraveSearchProvider('fixture-only-key', async (input) => {
+    requested = String(input);
+    return Response.json({ web: { results: [] }, query: { more_results_available: false } });
+  });
+  const page = await provider.searchPage('fixture query', { count: 3, countryCode: 'SI', targetingMode: 'api_country' });
+  const url = new URL(requested);
+  assert.equal(url.searchParams.get('country'), null);
+  assert.equal(url.searchParams.get('q'), 'fixture query');
+  assert.equal(url.searchParams.get('count'), '3');
+  assert.equal(url.searchParams.get('offset'), '0');
+  assert.equal(url.searchParams.get('safesearch'), 'strict');
+  assert.equal(page.requestMetadata?.countryCode, undefined);
+});
+
+test('provider sends a supported country value in upper case', async () => {
+  let requested = '';
+  const provider = new BraveSearchProvider('fixture-only-key', async (input) => {
+    requested = String(input);
+    return Response.json({ web: { results: [] } });
+  });
+  const page = await provider.searchPage('fixture query', { count: 3, countryCode: 'ca' });
+  assert.equal(new URL(requested).searchParams.get('country'), 'CA');
+  assert.equal(page.requestMetadata?.countryCode, 'CA');
+});
+
+test('provider retries a rate limit with exponential backoff before reporting it', async () => {
+  const delays: number[] = [];
+  let calls = 0;
+  const provider = new BraveSearchProvider('fixture-only-key', async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: { id: 'occurrence-429', status: 429, code: 'RATE_LIMITED' } }), {
+      status: 429, headers: { 'content-type': 'application/json' },
+    });
+  }, async (milliseconds) => { delays.push(milliseconds); });
+
+  await assert.rejects(provider.searchPage('fixture query', { count: 3 }), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.kind, 'rate_limited');
+    assert.equal(error.failure.statusCode, 429);
+    assert.equal(error.failure.braveErrorCode, 'RATE_LIMITED');
+    assert.equal(JSON.stringify(error.failure).includes('fixture-only-key'), false);
+    return true;
+  });
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [1_000, 2_000]);
+});
+
+test('provider honors Retry-After and returns the retried successful page', async () => {
+  const delays: number[] = [];
+  let calls = 0;
+  const provider = new BraveSearchProvider('fixture-only-key', async () => {
+    calls += 1;
+    if (calls === 1) return new Response('', { status: 503, headers: { 'retry-after': '4' } });
+    return Response.json({ web: { results: [
+      { title: 'Recovered profile', url: 'https://university.example.edu/faculty/recovered', description: 'Synthetic snippet.' },
+    ] } });
+  }, async (milliseconds) => { delays.push(milliseconds); });
+
+  const page = await provider.searchPage('fixture query', { count: 1 });
+  assert.equal(page.results.length, 1);
+  assert.equal(page.results[0]?.url, 'https://university.example.edu/faculty/recovered');
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [4_000]);
+});
+
+test('provider does not retry a deterministic HTTP 422 validation response', async () => {
+  let calls = 0;
+  const provider = new BraveSearchProvider('fixture-only-key', async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ type: 'ErrorResponse', error: { id: 'occurrence-422', status: 422, code: 'VALIDATION' } }), {
+      status: 422, headers: { 'content-type': 'application/json' },
+    });
+  }, async () => { assert.fail('a validation failure must not be retried'); });
+
+  await assert.rejects(provider.searchPage('fixture query', { count: 3 }), (error: unknown) => {
+    assert.ok(error instanceof SanitizedIntegrationError);
+    assert.equal(error.failure.statusCode, 422);
+    assert.equal(error.failure.braveErrorCode, 'VALIDATION');
+    return true;
+  });
+  assert.equal(calls, 1);
 });
 
 test('provider timeout errors are classified without retaining raw error text', async () => {

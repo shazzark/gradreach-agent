@@ -62,7 +62,7 @@ export async function runFiveCountryProfessorBatch(options: DiscoveryBatchOption
     if (!countries.length) {
       process.stdout.write(`${JSON.stringify({
         attemptedCountries: [], requests: 0, resultCount: 0, saved: 0, preparedEvidence: 0,
-        duplicates: 0, rejected: 0, officialPageFetchFailures: 0, searchFailures: [],
+        duplicates: 0, rejected: 0, officialPageFetchFailures: 0, searchFailures: [], providerHealth: 'ok',
         countriesRemaining: [], skippedAttemptedCountries: options.skipCountries,
         uncoveredCountries: profile.applicant.target.countries.filter((country) => !OFFICIAL_HOSTS_BY_REGION[country as keyof typeof OFFICIAL_HOSTS_BY_REGION]),
       })}\n`);
@@ -75,7 +75,7 @@ export async function runFiveCountryProfessorBatch(options: DiscoveryBatchOption
     const existing = await storage.repositories.candidates.list();
     const existingIds = new Set(existing.map((candidate) => candidate.id));
     const attemptedCountries: string[] = [];
-    const searchFailures: Array<{ country: string; kind: string }> = [];
+    const searchFailures: Array<{ country: string; kind: string; providerStatus: 'rate_limited' | 'error'; statusCode?: number; braveErrorCode?: string }> = [];
     const baseProvider = new BraveSearchProvider();
     const provider: SearchProvider = {
       async search(query: string, options?: SearchOptions) {
@@ -90,7 +90,11 @@ export async function runFiveCountryProfessorBatch(options: DiscoveryBatchOption
         try { return await baseProvider.search(query, { ...options, count: 3 }); }
         catch (error) {
           const failure = safeFailureRecord(error);
-          searchFailures.push({ country, kind: failure.kind });
+          searchFailures.push({
+            country, kind: failure.kind, providerStatus: failure.kind === 'rate_limited' ? 'rate_limited' : 'error',
+            ...(failure.statusCode ? { statusCode: failure.statusCode } : {}),
+            ...(failure.braveErrorCode ? { braveErrorCode: failure.braveErrorCode } : {}),
+          });
           await appendPhase3ResultDiagnostic({
             stage: 'brave_search', country, hostname: null, outcome: 'search_failed',
             targetingMode: expectedMode,
@@ -166,6 +170,7 @@ export async function runFiveCountryProfessorBatch(options: DiscoveryBatchOption
       rejected: result.rejected,
       officialPageFetchFailures: result.officialPageFetchFailures,
       searchFailures,
+      providerHealth: searchFailures.length ? 'provider_rate_limited_or_error' : 'ok',
       countriesRemaining: verifiedCountries.slice(lastCountryIndex + 1).filter((country) => !skippedCountries.has(country)),
       skippedAttemptedCountries: options.skipCountries,
       uncoveredCountries: profile.applicant.target.countries.filter((country) => !OFFICIAL_HOSTS_BY_REGION[country as keyof typeof OFFICIAL_HOSTS_BY_REGION]),

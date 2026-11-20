@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
-import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, selectNextDiscoveryBatch, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
+import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, discoveryRunFailureLabel, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, selectNextDiscoveryBatch, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
+import { failureForHttpStatus } from '../src/infrastructure/sanitized-failure.ts';
 import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
 import { firstVerifiedTargetCountries, nextVerifiedTargetCountries } from '../src/domain/discovery-country-coverage.ts';
 
@@ -202,6 +203,21 @@ test('automatic checks fail safely when no configured country has a verified hos
   assert.equal(result.state, 'failed');
   assert.equal('failureCode' in result ? result.failureCode : '', 'no_verified_country');
   assert.equal(searches, 0);
+});
+
+test('a provider failure is recorded as an explicit provider failure instead of an empty run', async () => {
+  const data = fakeRepos([], { ...DEFAULT_DISCOVERY_SCHEDULE, enabled: true, paused: false, frequency: 'daily', countries: ['Japan'] });
+  const result = await runAutomaticDiscovery({
+    repositories: data.repositories, configuredCountries: ['Japan'], verifiedCountries: ['Japan'],
+    officialHostsByRegion: { Japan: [...OFFICIAL_HOSTS_BY_REGION.Japan] }, countryCodesByRegion: { Japan: 'JP' },
+    provider: { async search() { throw failureForHttpStatus(429, undefined, { responseReceived: true, statusCode: 429 }); } },
+    fetchPage: async (url: string) => ({ url, html: '' }), now: new Date('2026-11-04T08:00:00.000Z'),
+  });
+  assert.equal(result.state, 'failed');
+  assert.equal(result.failureCode, 'provider_rate_limited');
+  assert.equal(discoveryRunFailureLabel(result.failureCode!), 'Provider rate limited/error (HTTP 429)');
+  assert.equal(discoveryRunFailureLabel('provider_error'), 'Provider rate limited/error');
+  assert.equal(discoveryRunFailureLabel('no_verified_country'), 'no_verified_country');
 });
 
 test('scheduled rechecks append dated recommendations and preserve saved candidate decisions', async () => {
