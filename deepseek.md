@@ -586,5 +586,8 @@ npm run typecheck
   - The longest site filter after expansion is still Japan at 219 characters; the region budget test keeps every
     single-search query inside the 400-character and 50-term limits enforced by `queryFor`.
   - No dependencies were added, no provider or scheduler behaviour changed, and the daily-send cap is untouched.
-- **Git:** branch `phase-6/allowlist-expansion`; the PR and rebase-merge evidence is recorded in the follow-up commit once
-  CI reports.
+- **Git:** branch `phase-6/allowlist-expansion` at `77eae67`; direct pushes to `main` are still blocked by branch protection, so
+  the change went through PR #3 and was rebase-merged at 2026-11-20T22:18:09Z as `8f8c763` (identical tree to the local
+  commit). CI: PR run `44827557991` passed both required checks - "Typecheck and unit tests" 28 s and "MongoDB integration"
+  39 s - and the post-merge push run `44827805809` completed `success` in 45 s. Local `main` was fast-forwarded to
+  `8f8c763`; the branch remains on the remote for reference.
