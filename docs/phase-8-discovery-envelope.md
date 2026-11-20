@@ -65,6 +65,9 @@ The schedule is now active by default: `enabled: true`, `paused: false`, `daily`
 - The worker process still needs its own deployment opt-in, `GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true`
   (`src/interfaces/discovery-scheduler.ts`). No workstation runs discovery merely because the repository is
   checked out, and the default does not spend provider credit until the owner starts the worker.
+  **Retained deliberately:** the owner confirmed on 2026-11-20 that this gate stays even though the schedule
+  defaults to enabled, so an enabled default never means "starts spending on checkout". Do not remove the gate
+  as part of a later envelope change; an enabled default plus this gate is the intended end state.
 - Each due slot is claimed once (`discovery:<local slot>`), so restarting the worker mid-slot cannot repeat a
   run; a repeated attempt returns `duplicate`.
 - The owner can pause, disable, change frequency/time/timezone, or restrict countries from `/discovery`.

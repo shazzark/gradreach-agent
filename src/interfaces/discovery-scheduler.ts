@@ -11,6 +11,8 @@ import { publishJobProgress } from '../infrastructure/job-progress-bus.ts';
 const POLL_INTERVAL_MS = 60_000;
 
 export async function runDiscoveryScheduler(): Promise<void> {
+  // Deliberate gate retained by owner decision on 2026-11-20: the saved schedule defaults to enabled, but starting this
+  // worker is still the action that spends provider credit. See docs/phase-8-discovery-envelope.md before removing it.
   if (process.env.GRADREACH_DISCOVERY_SCHEDULER_ENABLED !== 'true') {
     process.stdout.write('Automatic discovery is disabled. Set GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true after configuring the owner schedule and worker deployment.\n');
     return;

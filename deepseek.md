@@ -455,6 +455,11 @@ npm run typecheck
   `GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true` deployment opt-in, and the owner
   can pause or narrow the schedule from `/discovery`, whose copy and limit
   hint were updated to match.
+- **Worker gate retained (owner decision, 2026-11-20):** the saved schedule now defaults to
+  `enabled: true, paused: false`, but `GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true` is still required before the
+  worker loops, so an enabled default never spends provider credit on a plain checkout. The decision is recorded in
+  `docs/phase-8-discovery-envelope.md` and as a comment in `src/interfaces/discovery-scheduler.ts` so a later envelope
+  change does not delete the gate.
 - **Provider budget guard:** new `MAX_DAILY_SEARCHES = 20` plus
   `searchesUsedOnDay(schedule, runs, now)`, which sums `counts.searches` from
   persisted runs started on the schedule-local date and ignores unparseable
