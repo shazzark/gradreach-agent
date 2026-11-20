@@ -543,3 +543,11 @@ npm run typecheck
   `scheduler_heartbeat` round trip was added to `test/mongo-storage.integration.test.ts` (gated by
   `npm run test:mongodb`). No worker was started, no heartbeat reached a live database, and the banner was not
   observed in a running deployment, so supervision is unit- and wiring-verified only.
+- **Post-push CI:** `git push origin main` of `c4254dc` was rejected with `GH006: Protected branch update failed
+  ... 2 of 2 required status checks are expected`, so the bypass list that let Batch 4 land before checks reported
+  no longer applies - that open item appears closed and should be confirmed in repository settings. The commit went
+  out as branch `phase-5/scheduler-heartbeat`, was reviewed in PR #1, and was merged with *Rebase and merge* at
+  2026-11-20T20:37:09Z as `dd06a57` (identical tree; GitHub rewrites the committer, so the SHA differs from the local
+  `c4254dc`). PR run `44812808162` and post-merge push run `44812998201` (head `dd06a57`) both completed `success`:
+  "Typecheck and unit tests" 27 s and 35 s, "MongoDB integration" 43 s and 46 s. Local `main` was re-synced to
+  `dd06a57`. The only annotation is the Node 20 action deprecation warning; the Node 22 to 24 bump remains open.
