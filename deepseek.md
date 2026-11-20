@@ -389,3 +389,44 @@ npm run test:mongodb   # with .env aside and the synthetic URI: fail, exit 1 →
 npm test               # D: with the real .env: integration test skips
 npm run typecheck
 ```
+## Batch 3 — R6 (Brave 422 diagnosis)
+
+- **Root cause of 422:** Brave validates the `country` query parameter against a
+  closed enum and returns `422` with `code: VALIDATION` for any value outside
+  it. The 19 recorded failures (`outputs/phase3-result-diagnostics.jsonl`,
+  2026-11-09) are exactly the regions whose ISO codes are absent from that enum
+  (`SI`, `BA`, `CZ`, `EE`, `HR`, `HU`, `IS`, `IE`, `LV`, `LI`, `LT`, `LU`, `MT`,
+  `MD`, `ME`, `RS`, `SK`, `UA`, `BG`), while `CA`/`AU`/`DE`/`JP`/`US` returned
+  `200`. Confirmed by a bounded live probe on 2026-11-20: `country=SI|BA|CZ` →
+  `422 VALIDATION` with Brave's enum in `error.meta`; `country=CA` → `200`;
+  600-character query → `200`; `count=20&offset=9` → `200`; quoted/parenthesised
+  queries → `200`. Query length, `count`/`offset`, `safesearch`, quoting, and
+  parentheses are all ruled out, so this is a request-validation failure, not a
+  rate limit. The historical records keep only `statusCode: 422` (no Brave error
+  code), so the body had to be reproduced; the failed run's parameters were
+  never stored.
+- **Fix implemented:** `BRAVE_SUPPORTED_COUNTRY_CODES` (the full enum from the
+  API) plus `isBraveSupportedCountryCode()`; `searchPage` omits an unlisted
+  `country` instead of forwarding it, so an unsupported region keeps its
+  `site:`/region query. Bounded exponential backoff for `429`/`5xx` (three
+  attempts, `Retry-After` honored, 1 s then 2 s, capped at 10 s); `422` is never
+  retried. `research-discovery.ts` now emits a sanitized `search_failed`
+  diagnostic (status, Brave code/id, request ID) before aborting;
+  `automatic-discovery.ts` stores `provider_rate_limited`/`provider_error` and
+  the `/discovery` run list renders `Provider rate limited/error`; the manual
+  batch prints `providerHealth` plus per-failure `providerStatus`,
+  `statusCode`, and `braveErrorCode`; the workspace discovery action persists
+  the same diagnostics.
+- **Verification:** `npm run typecheck` exit 0. `npm test` 297 tests, 296
+  passed, 0 failed, 1 skipped. `npm run discovery:preflight`
+  `{"ok":true,"profilePreferencesRead":true,"profileCountriesConfigured":true,
+  "leadIdsRead":true,"leadCount":12}`. Diagnosis recorded in
+  `docs/phase-6-brave-422-diagnosis.md`; seven new tests cover the enum guard,
+  backoff, `Retry-After`, the no-retry-on-422 rule, the search-failure
+  diagnostic, and run-level provider failure codes. `DISCOVERY_LIMITS`,
+  dependencies, and npm scripts are unchanged; no post-fix search was run, so
+  throughput is still unmeasured.
+- **Commits:** `docs: add brave 422 diagnosis`,
+  `fix: resolve brave search 422 responses and add provider backoff`,
+  `docs: record batch 3 in hand-off log`.
+
