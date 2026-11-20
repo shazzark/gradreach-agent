@@ -356,8 +356,8 @@ variables between gate experiments.
 
 ## Open items carried forward
 
-- R6 is closed (Batch 3) and R5 is closed (Batch 4); R7–R8 and R10–R12 in
-  `AUDIT.md` remain untouched.
+- R6 is closed (Batch 3), R5 is closed (Batch 4) and R8 is closed (Batch 5);
+  R7 and R10–R12 in `AUDIT.md` remain untouched.
 - Lint/Prettier/Vitest/coverage stays a separate, explicitly deferred phase; no
   dependency or npm script was added here.
 - The workflow has one green run (`44799955899`, both jobs), and `main` does
@@ -501,3 +501,45 @@ npm run typecheck
   gating it; trimming the bypass actors in repository settings is still open.
   The only remaining CI annotation is the Node 20 action deprecation warning.
 
+## Batch 5 — R8 (Worker Heartbeat)
+
+- **What changed:** A supervised worker now proves it is alive instead of leaving the website to guess.
+  - `src/domain/scheduler-heartbeat.ts` (new) holds `SCHEDULER_HEARTBEAT_STALE_MS = 120_000`,
+    `SCHEDULER_WORKERS = ['outreach', 'discovery']`, the `SchedulerHeartbeat` shape, and the pure
+    `schedulerHeartbeatStatus(heartbeat, now)` classifier (`live` / `stale` / `missing`).
+  - `mongo-storage.ts` adds `SchedulerHeartbeatRepository` with `updateSchedulerHeartbeat(worker, at?)` and
+    `getSchedulerHeartbeat(worker)`, wired into `GradReachRepositories` as `schedulerHeartbeat` over the
+    `scheduler_heartbeat` collection. Each worker owns one document (`scheduler-heartbeat:outreach`,
+    `scheduler-heartbeat:discovery`) carrying only `lastHeartbeatAt` (ISO) plus the adapter's `updatedAt`. An unknown
+    worker name and an unparseable instant are rejected before any write.
+  - `src/interfaces/scheduler-heartbeat-pulse.ts` (new) provides `pulseSchedulerHeartbeat()`, which writes the tick
+    instant and converts a storage failure into one stderr line, returning `false` instead of throwing.
+  - `outreach-scheduler.ts` records its heartbeat at the start of every 60-second tick, before `deliverNext()`, and
+    now imports `local-env.ts` directly (it previously loaded `.env` only through `gmail-oauth.ts`).
+    `discovery-scheduler.ts` does the same before spending a search; its connect function became injectable, matching
+    the outreach worker, so the gate can be tested without a live database.
+  - `src/web/outreach-runtime-status.ts` gained the `worker_down` state and evaluates
+    `disabled → worker_down → paused → armed`. A dead worker outranks the pause control because a paused queue with no
+    worker delivers nothing the moment the owner resumes it. `/outreach` renders a red `role="alert"` banner —
+    "Worker is not running. Please start the scheduler process." — plus the measured heartbeat age;
+    `ui.danger` and `--color-red-soft` were added for it.
+  - `docs/phase-5-worker-supervision.md` (new) documents the document shape, the threshold, the status ordering, and
+    Windows Task Scheduler, systemd, and PM2 recipes, plus an offline health check.
+  - Untouched by design: the five-per-local-day sending cap, the discovery envelope (`5` searches / `10` results /
+    `20` inspections / `20` daily searches), provider backoff, and dependencies.
+- **Stale heartbeat threshold:** 120 seconds, applied as *older than* two minutes, so a heartbeat exactly 120 s old is
+  still live. Both workers poll every 60 s, which makes this two missed ticks and keeps one slow provider call from
+  being reported as an outage. A worker that never wrote a heartbeat is `missing` and is reported as down, not
+  assumed healthy; a future-dated heartbeat is floored to a zero age. When `OUTREACH_SENDING_ENABLED` is not `true`
+  the state stays `disabled`, because the worker is supposed to exit and a stale record is not an outage.
+- **Verification:** `npm run typecheck` exit 0. `npm test` 318 tests, 317 passed, 1 skipped (opt-in MongoDB
+  integration), 0 failed — up from 301. `test/scheduler-heartbeat.test.ts` (new, 11 tests) covers the threshold
+  constant and its exclusive boundary, missing/unreadable records, clock skew, an invalid reference time, per-worker
+  document ids and independent reads, no-record behaviour, unknown-worker and invalid-timestamp rejection with no
+  write, pulse success, and the swallowed failure path. `test/outreach-runtime-status.test.ts` covers `worker_down`
+  for stale and never-recorded heartbeats, the two-minute boundary, and dead-worker-before-pause ordering.
+  `test/discovery-scheduler.test.ts` (new) proves `GRADREACH_DISCOVERY_SCHEDULER_ENABLED` still returns before any
+  connection, and both scheduler tests assert the heartbeat is written before delivery / before a search. The
+  `scheduler_heartbeat` round trip was added to `test/mongo-storage.integration.test.ts` (gated by
+  `npm run test:mongodb`). No worker was started, no heartbeat reached a live database, and the banner was not
+  observed in a running deployment, so supervision is unit- and wiring-verified only.

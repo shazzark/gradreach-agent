@@ -26,7 +26,7 @@ const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
   'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'opportunities', 'program_assessments', 'outreach_control', 'outreach_attempts',
   'discovery_job_runs',
-  'saved_lead_reprocess_runs', 'confirmed_professors',
+  'saved_lead_reprocess_runs', 'confirmed_professors', 'scheduler_heartbeat',
 ];
 
 /** Names the configured deployment without echoing credentials from the URI. */
@@ -168,6 +168,17 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     for (let index = 0; index < 5; index += 1) assert.equal(await repositories.schedulerControl.reserveDailySend(`2026-10-19T10:0${index}:00Z`), true);
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-19T10:05:00Z'), false);
     assert.equal(await repositories.schedulerControl.reserveDailySend('2026-10-20T00:00:00Z'), true);
+
+    // Worker supervision: each worker owns a single heartbeat document, and an unknown worker cannot create one.
+    assert.equal(await repositories.schedulerHeartbeat.getSchedulerHeartbeat('outreach'), undefined);
+    await repositories.schedulerHeartbeat.updateSchedulerHeartbeat('outreach', '2026-10-19T10:06:00Z');
+    await repositories.schedulerHeartbeat.updateSchedulerHeartbeat('discovery', '2026-10-19T10:06:30Z');
+    assert.deepEqual(await repositories.schedulerHeartbeat.getSchedulerHeartbeat('outreach'), { lastHeartbeatAt: '2026-10-19T10:06:00.000Z' });
+    await repositories.schedulerHeartbeat.updateSchedulerHeartbeat('outreach', '2026-10-19T10:07:00Z');
+    assert.deepEqual(await repositories.schedulerHeartbeat.getSchedulerHeartbeat('outreach'), { lastHeartbeatAt: '2026-10-19T10:07:00.000Z' });
+    assert.deepEqual(await repositories.schedulerHeartbeat.getSchedulerHeartbeat('discovery'), { lastHeartbeatAt: '2026-10-19T10:06:30.000Z' });
+    await assert.rejects(repositories.schedulerHeartbeat.updateSchedulerHeartbeat('mailer' as never), /known scheduler worker/);
+    await assert.rejects(repositories.schedulerHeartbeat.updateSchedulerHeartbeat('outreach', 'not-a-date'), /lastHeartbeatAt must be a valid date/);
 
     stage = 'discovery_run_diagnostic_storage';
     const discoveryRun = {

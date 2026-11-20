@@ -284,3 +284,10 @@ A new `MAX_DAILY_SEARCHES = 20` guard counts search requests from persisted runs
 
 Verification: `npm run typecheck` exit 0; `npm test` 301 tests, 300 passed, 1 opt-in MongoDB test skipped, 0 failed; focused `test/automatic-discovery.test.ts` 20/20. No provider request, scheduler start, MongoDB write, or email was performed. Details and the regions × runs × saves table are in `docs/phase-8-discovery-envelope.md`.
 
+### Worker supervision and heartbeat (2026-11-20)
+
+Closed R8 of the audit. Both schedulers (`npm run outreach:scheduler`, `npm run discovery:scheduler`) now write a heartbeat at the start of every 60-second tick into the `scheduler_heartbeat` collection, one document per worker (`scheduler-heartbeat:outreach`, `scheduler-heartbeat:discovery`) containing only `lastHeartbeatAt` as an ISO string. `SchedulerHeartbeatRepository.updateSchedulerHeartbeat`/`getSchedulerHeartbeat` own the storage, `pulseSchedulerHeartbeat` converts a write failure into a single stderr line so a database problem cannot stop the delivery loop, and `schedulerHeartbeatStatus` classifies a record as `live`, `stale`, or `missing`.
+
+`getOutreachRuntimeStatus` gained a `worker_down` state evaluated after the sending opt-in and before the pause control, because a paused queue with a dead worker silently delivers nothing when the owner resumes it. `/outreach` renders a red `role="alert"` banner naming the heartbeat age when the record is missing or older than two minutes. `docs/phase-5-worker-supervision.md` documents the shape, the threshold, and Windows Task Scheduler, systemd, and PM2 recipes. The five-per-local-day sending cap, the discovery envelope, provider backoff, and dependencies are unchanged.
+
+Verification: `npm run typecheck` exit 0; `npm test` 318 tests, 317 passed, 1 opt-in MongoDB test skipped, 0 failed; `test/scheduler-heartbeat.test.ts` and `test/discovery-scheduler.test.ts` are new, and `test/mongo-storage.integration.test.ts` gained the heartbeat round trip behind `npm run test:mongodb`. No worker was started, no heartbeat reached a live database, and the banner has not been observed in a running deployment.

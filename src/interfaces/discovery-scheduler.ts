@@ -7,10 +7,11 @@ import { fetchOfficialPage } from '../application/research-discovery.ts';
 import { BraveSearchProvider } from '../infrastructure/brave-search-provider.ts';
 import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { publishJobProgress } from '../infrastructure/job-progress-bus.ts';
+import { pulseSchedulerHeartbeat } from './scheduler-heartbeat-pulse.ts';
 
 const POLL_INTERVAL_MS = 60_000;
 
-export async function runDiscoveryScheduler(): Promise<void> {
+export async function runDiscoveryScheduler(connect: typeof connectMongoStorage = connectMongoStorage): Promise<void> {
   // Deliberate gate retained by owner decision on 2026-11-20: the saved schedule defaults to enabled, but starting this
   // worker is still the action that spends provider credit. See docs/phase-8-discovery-envelope.md before removing it.
   if (process.env.GRADREACH_DISCOVERY_SCHEDULER_ENABLED !== 'true') {
@@ -27,7 +28,8 @@ export async function runDiscoveryScheduler(): Promise<void> {
     while (!stop) {
       let storage: Awaited<ReturnType<typeof connectMongoStorage>> | undefined;
       try {
-        storage = await connectMongoStorage();
+        storage = await connect();
+        await pulseSchedulerHeartbeat(storage.repositories.schedulerHeartbeat, 'discovery');
         const profile = await storage.repositories.profiles.get('primary');
         if (profile) {
           const hosts = Object.fromEntries(Object.entries(OFFICIAL_HOSTS_BY_REGION).map(([country, entries]) => [country, [...entries]]));
