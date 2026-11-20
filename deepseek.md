@@ -235,7 +235,7 @@ addresses, or applicant data. Keep it that way.
 | Skills applied        | `engineering-workflow`, `git-engineering` (global, unmodified)                                 |
 | Dependencies          | Unchanged. No `package.json` / `package-lock.json` edits, no new npm scripts                   |
 | Verification          | `npm run typecheck` exit 0 · `npm test` exit 0 (290 tests, 289 pass, 0 fail, 1 skip) · four-case gate matrix reproduced directly (both absent → skip, URI only → skip, both + unreachable → fail) · `npm run test:mongodb` injection proven |
-| Remote state          | Not pushed. Push is the owner's decision                                                       |
+| Remote state          | Pushed to `origin/main` on owner instruction (`9d62312`, `62a723d`); CI run `44799955899` green on both jobs |
 
 ## What changed, precisely
 
@@ -336,8 +336,11 @@ variables between gate experiments.
   flag.
 - **The live integration job was not executed locally.** Nothing listens on
   `127.0.0.1:27017` and the Docker daemon is not running on the dev machine, so
-  only the skip and fail-loud paths were exercised here. The first CI run is the
-  end-to-end proof that R4 asks for.
+  only the skip and fail-loud paths were exercised locally. The first CI run
+  supplied the end-to-end proof: run `44799955899` on `main` passed both jobs.
+  The verify job logged `# skipped 1` with no URI, and the integration job
+  reached the service (`MongoDB is accepting connections on 127.0.0.1:27017.`)
+  and logged `# skipped 0`, so the suite really executed there.
 - **Credential exposure during verification.** While inspecting the local
   `.env` (ignored, not part of this batch), the agent printed the
   `MONGODB_TEST_URI` value — including its Atlas password — into the session
@@ -356,8 +359,9 @@ variables between gate experiments.
 - R5–R8 and R10–R12 in `AUDIT.md` are untouched.
 - Lint/Prettier/Vitest/coverage stays a separate, explicitly deferred phase; no
   dependency or npm script was added here.
-- The workflow itself is unverified until the owner pushes; required status
-  checks and branch protection on `main` are repository settings, not files.
+- The workflow has one green run (`44799955899`, both jobs). Required status
+  checks and branch protection on `main` are repository settings, not files —
+  configure them if CI should be blocking.
 - The integration job pulls `mongo:7` from Docker Hub anonymously. If runner
   egress blocks that image, pin an approved registry mirror.
 - The fail-loud error surfaces after the driver's default 30-second
