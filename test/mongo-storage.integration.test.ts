@@ -14,13 +14,28 @@ import type { ProgramAssessment, ProgramRecord } from '../src/domain/program-ass
 import type { OpportunityDiscoveryRun } from '../src/domain/opportunity-discovery.ts';
 import { assertMongoTestUri, getEnabledMongoTestUri } from './mongo-test-uri.ts';
 
-const mongoUri = getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEGRATION, uri: process.env.MONGODB_TEST_URI });
+// Two gates protect live deployments: a stray MONGODB_TEST_URI in .env must not make a
+// plain `npm test` write to that database. RUN_MONGODB_INTEGRATION=true is the explicit
+// opt-in (`npm run test:mongodb` sets it) and MONGODB_TEST_URI names the isolated target.
+// Once both are set this proof must run, or fail loudly if that deployment is unreachable.
+const mongoUri = getEnabledMongoTestUri({
+  enabled: process.env.RUN_MONGODB_INTEGRATION,
+  uri: process.env.MONGODB_TEST_URI,
+});
 const examplePath = new URL('../private.profile.example.json', import.meta.url);
 const testCollections = [
   'applicant_profiles', 'professor_candidates', 'candidate_evidence_triage', 'discovery_leads', 'lead_triage_recommendations', 'programs', 'opportunities', 'program_assessments', 'outreach_control', 'outreach_attempts',
   'discovery_job_runs',
   'saved_lead_reprocess_runs', 'confirmed_professors',
 ];
+
+/** Names the configured deployment without echoing credentials from the URI. */
+function describeMongoEndpoint(client: MongoClient): string {
+  const { hosts, srvHost } = client.options;
+  if (srvHost) return `${srvHost} (SRV)`;
+  const addresses = hosts.map((host) => host.toString());
+  return addresses.length > 0 ? addresses.join(', ') : 'the configured MongoDB deployment';
+}
 
 function sampleCandidate(id: string, email: string): ProfessorCandidate {
   return {
@@ -49,15 +64,24 @@ function sampleAssessment(assessedAt: string): ProgramAssessment {
 }
 
 test('Mongo profile, candidate, program, assessment and scheduler repositories preserve storage boundaries', {
-  skip: !mongoUri ? 'Set MONGODB_TEST_URI to an isolated test deployment to run MongoDB integration checks' : false,
+  skip: !mongoUri ? 'Set MONGODB_TEST_URI and opt in with RUN_MONGODB_INTEGRATION=true (npm run test:mongodb) to run MongoDB integration checks' : false,
 }, async () => {
   assertMongoTestUri(mongoUri!);
 
   const client = new MongoClient(mongoUri!);
   let stage = 'client_connect';
+  let connectionFailure: Error | undefined;
   let db;
   try {
-    await client.connect();
+    try {
+      await client.connect();
+    } catch {
+      connectionFailure = new Error(
+        `MONGODB_TEST_URI is set but MongoDB at ${describeMongoEndpoint(client)} is unreachable. `
+          + 'Start MongoDB at that address, or unset MONGODB_TEST_URI to skip MongoDB integration checks.',
+      );
+      throw connectionFailure;
+    }
     db = client.db('gradreach_test');
     stage = 'discovery_migration';
     await migrateDiscoveryCollections(db);
@@ -340,6 +364,7 @@ test('Mongo profile, candidate, program, assessment and scheduler repositories p
     assert.equal(await repositories.profiles.get('synthetic-profile'), undefined);
     assert.equal(await repositories.opportunities.delete(sampleProgram.id), true);
   } catch (error) {
+    if (error === connectionFailure) throw error;
     const failure = safeFailureRecord(error);
     throw new Error(JSON.stringify({
       stage,

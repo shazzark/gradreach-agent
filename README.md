@@ -1,5 +1,7 @@
 # GradReach Agent
 
+[![CI](https://github.com/shazzark/gradreach-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shazzark/gradreach-agent/actions/workflows/ci.yml)
+
 Local research and outreach assistance for the 2027 international MSc application cycle. GradReach records source-backed professor/program leads across configured regions, assesses reviewed program facts conservatively, prepares personalized drafts, and plans a maximum of five outreach attempts per local calendar day.
 
 ## Current status
