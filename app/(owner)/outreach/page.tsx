@@ -1,20 +1,26 @@
 import type { Metadata } from 'next';
 import { queueApprovedDraftsAction, recordOutcomeAction, togglePauseAction } from '../../actions.ts';
-import { getOwnerWorkspace } from '../../../src/web/owner-data.ts';
+import { getOwnerWorkspace, withOwnerData } from '../../../src/web/owner-data.ts';
 import { ui } from '../../../src/web/ui-classes.ts';
 import { getOutreachRuntimeStatus } from '../../../src/web/outreach-runtime-status.ts';
 
 export const metadata: Metadata = { title: { absolute: 'GradReach | Outreach' } };
 
 export default async function OutreachPage({ searchParams }: { searchParams: Promise<{ state?: string }> }) {
-  const [{ control, attempts, candidates }, query] = await Promise.all([getOwnerWorkspace(), searchParams]);
+  const [{ control, attempts, candidates }, heartbeat, query] = await Promise.all([
+    getOwnerWorkspace(),
+    withOwnerData((repositories) => repositories.schedulerHeartbeat.getSchedulerHeartbeat('outreach')),
+    searchParams,
+  ]);
   const deliveryRuntime = getOutreachRuntimeStatus({
     sendingEnabled: process.env.OUTREACH_SENDING_ENABLED === 'true',
     control,
+    heartbeat,
   });
   const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   return <main className="min-w-0">
     <div className={ui.pageHead}><div><p className={ui.eyebrow}>Approval-gated delivery</p><h1 className={ui.pageTitle}>Outreach</h1><p className={ui.pageDescription}>Manage queue preparation and review the saved delivery history. Gmail authorization remains separate.</p></div><span className={`${ui.status} ${control.paused ? 'bg-amber-soft text-amber' : 'bg-green-soft text-green-dark'}`}>{control.paused ? 'Paused' : 'Active'}</span></div>
+    {deliveryRuntime.state === 'worker_down' ? <p className={`${ui.danger} mb-4`} role="alert"><strong>Worker is not running. Please start the scheduler process.</strong><br/>{deliveryRuntime.detail}</p> : null}
     {query.state === 'unavailable' ? <p className={ui.warning} role="status">Outreach control operation could not be completed. No sending was initiated by this website.</p> : query.state === 'saved' ? <p className={ui.note} role="status">Outreach queue settings updated.</p> : null}
 
     <section className={`${ui.grid} ${ui.section}`}>

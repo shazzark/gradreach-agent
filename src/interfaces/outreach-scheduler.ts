@@ -1,8 +1,10 @@
+import '../infrastructure/local-env.ts';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { stdout } from 'node:process';
 import { connectMongoStorage, type ConnectedMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { GmailDeliveryService } from '../infrastructure/gmail-oauth.ts';
+import { pulseSchedulerHeartbeat } from './scheduler-heartbeat-pulse.ts';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -21,6 +23,8 @@ export async function runOutreachScheduler(connect: () => Promise<ConnectedMongo
   process.once('SIGTERM', stopScheduler);
   try {
     while (!stop) {
+      // The heartbeat is written before delivery work, so a long provider call cannot look like a dead worker.
+      await pulseSchedulerHeartbeat(storage.repositories.schedulerHeartbeat, 'outreach');
       try {
         const result = await delivery.deliverNext();
         if (result.status === 'delivered') stdout.write('One approved outreach message was sent and recorded.\n');

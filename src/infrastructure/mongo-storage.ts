@@ -12,6 +12,7 @@ import { DAILY_LIMIT_MESSAGE, getLocalDateKey, isValidDailyLimit } from '../doma
 import { assertDiscoveryCollectionsMigrated } from './discovery-collection-migration.ts';
 import { assertOpportunityCollectionMigrated, opportunityIdentityHash, opportunitySourceHash } from './opportunity-collection-migration.ts';
 import type { ConfirmedProfessor } from '../application/confirmed-professors.ts';
+import { isSchedulerWorker, type SchedulerHeartbeat, type SchedulerWorker } from '../domain/scheduler-heartbeat.ts';
 
 interface StoredProfile extends Document {
   _id: string;
@@ -58,6 +59,13 @@ interface StoredProgramAssessment extends Document {
 interface StoredSchedulerControl extends Document {
   _id: 'daily-scheduler';
   control: SchedulerControl;
+  updatedAt: Date;
+}
+
+/** One heartbeat document per supervised worker, so a dead outreach worker cannot be masked by a live discovery worker. */
+interface StoredSchedulerHeartbeat extends Document {
+  _id: string;
+  lastHeartbeatAt: string;
   updatedAt: Date;
 }
 
@@ -721,6 +729,32 @@ export class SchedulerControlRepository {
   }
 }
 
+/**
+ * Persists the supervised-worker heartbeat. The document id is derived from the worker name so each worker proves its
+ * own liveness; an unknown worker name is rejected before it can create a stray document.
+ */
+export class SchedulerHeartbeatRepository {
+  private readonly collection: Collection<StoredSchedulerHeartbeat>;
+
+  constructor(collection: Collection<StoredSchedulerHeartbeat>) { this.collection = collection; }
+
+  async updateSchedulerHeartbeat(worker: SchedulerWorker, lastHeartbeatAt = new Date().toISOString()): Promise<void> {
+    if (!isSchedulerWorker(worker)) throw new Error('worker must be a known scheduler worker');
+    const instant = new Date(lastHeartbeatAt);
+    if (Number.isNaN(instant.getTime())) throw new Error('lastHeartbeatAt must be a valid date');
+    await this.collection.updateOne(
+      { _id: `scheduler-heartbeat:${worker}` },
+      { $set: { lastHeartbeatAt: instant.toISOString(), updatedAt: new Date() } },
+      { upsert: true },
+    );
+  }
+
+  async getSchedulerHeartbeat(worker: SchedulerWorker): Promise<SchedulerHeartbeat | undefined> {
+    const stored = await this.collection.findOne({ _id: `scheduler-heartbeat:${worker}` });
+    return stored ? { lastHeartbeatAt: stored.lastHeartbeatAt } : undefined;
+  }
+}
+
 export interface GradReachRepositories {
   profiles: ApplicantProfileRepository;
   candidates: ProfessorCandidateRepository;
@@ -729,6 +763,7 @@ export interface GradReachRepositories {
   opportunities: OpportunityRepository;
   assessments: ProgramAssessmentRepository;
   schedulerControl: SchedulerControlRepository;
+  schedulerHeartbeat: SchedulerHeartbeatRepository;
   discoverySchedule: AutomaticDiscoveryScheduleRepository;
   discoveryRuns: AutomaticDiscoveryRunRepository;
   opportunityDiscoveryRuns: OpportunityDiscoveryRunRepository;
@@ -747,6 +782,7 @@ export function createRepositories(db: Db): GradReachRepositories {
     opportunities: new OpportunityRepository(db.collection<StoredOpportunity>('opportunities')),
     assessments: new ProgramAssessmentRepository(db.collection<StoredProgramAssessment>('program_assessments')),
     schedulerControl: new SchedulerControlRepository(db.collection<StoredSchedulerControl>('outreach_control')),
+    schedulerHeartbeat: new SchedulerHeartbeatRepository(db.collection<StoredSchedulerHeartbeat>('scheduler_heartbeat')),
     discoverySchedule: new AutomaticDiscoveryScheduleRepository(db.collection<StoredDiscoverySchedule>('discovery_schedule')),
     discoveryRuns: new AutomaticDiscoveryRunRepository(db.collection<StoredDiscoveryRun>('discovery_job_runs')),
     opportunityDiscoveryRuns: new OpportunityDiscoveryRunRepository(db.collection<StoredDiscoveryRun>('discovery_job_runs')),

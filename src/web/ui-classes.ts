@@ -29,6 +29,7 @@ export const ui = {
   stack: 'grid min-w-0 gap-4',
   note: 'rounded-xl border border-green/15 bg-green-soft px-4 py-3 text-sm text-green-dark',
   warning: 'rounded-xl border border-amber/20 bg-amber-soft px-4 py-3 text-sm text-ink',
+  danger: 'rounded-xl border border-red/30 bg-red-soft px-4 py-3 text-sm font-medium text-red',
   muted: 'text-muted',
   checkRow: 'my-2 flex min-w-0 items-start gap-2 text-[13px]',
   outcome: 'font-mono text-[13px] font-semibold',
