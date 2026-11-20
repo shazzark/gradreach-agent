@@ -4,7 +4,7 @@ import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
 import { discoverProfessorCandidates, fetchOfficialPage, markCandidateEvidenceReviewed, MAX_SAME_HOST_PROFILE_PAGES_PER_DIRECTORY, MAX_LINKED_RESEARCH_PAGES_PER_PROFILE } from '../src/application/research-discovery.ts';
 import { BraveSearchProvider } from '../src/infrastructure/brave-search-provider.ts';
-import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
+import { OFFICIAL_HOSTS_BY_REGION, institutionForOfficialSource } from '../src/config/official-host-allowlist.ts';
 import { failureForHttpStatus, SanitizedIntegrationError, safeFailureRecord } from '../src/infrastructure/sanitized-failure.ts';
 import { prepareSavedProfessorEvidence } from '../src/application/professor-research-evidence.ts';
 
@@ -24,7 +24,41 @@ test('reviewed official-host allowlist contains only the verified exact universi
     'www.kurims.kyoto-u.ac.jp', 'www.media.kyoto-u.ac.jp', 'global.k.kyoto-u.ac.jp',
   ]);
   assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Russia, ['cs.msu.ru', 'asvk.cs.msu.ru']);
-  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION['United Kingdom'], ['cst.cam.ac.uk']);
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION['United Kingdom'], [
+    'cst.cam.ac.uk', 'www.cs.ox.ac.uk', 'www.gla.ac.uk', 'warwick.ac.uk', 'www.kcl.ac.uk', 'www.bristol.ac.uk',
+  ]);
+
+  const seen = new Set<string>();
+  for (const [region, hosts] of Object.entries(OFFICIAL_HOSTS_BY_REGION)) {
+    for (const host of hosts) {
+      assert.match(host, /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/, `${region} host ${host} is not a bare lowercase hostname`);
+      assert.ok(!seen.has(host), `${host} is listed twice`);
+      seen.add(host);
+      assert.ok(
+        institutionForOfficialSource(region, `https://${host}/reviewed-profile`),
+        `${region} host ${host} has no reviewed institution`,
+      );
+    }
+  }
+});
+
+test('multi-university regions attribute each exact host to its own institution', () => {
+  assert.equal(institutionForOfficialSource('United States', 'https://www.cs.cmu.edu/~professor/'), 'Carnegie Mellon University');
+  assert.equal(institutionForOfficialSource('United States', 'https://siebelschool.illinois.edu/academics/graduate'), 'University of Illinois Urbana-Champaign');
+  assert.equal(institutionForOfficialSource('Canada', 'https://www.cs.toronto.edu/~professor/'), 'University of Toronto');
+  assert.equal(institutionForOfficialSource('Switzerland', 'https://www.epfl.ch/labs/'), 'École Polytechnique Fédérale de Lausanne');
+  assert.equal(institutionForOfficialSource('Italy', 'https://di.unipi.it/en/people/'), 'University of Pisa');
+  assert.equal(institutionForOfficialSource('United States', 'https://example.edu/not-reviewed'), 'University of Illinois Urbana-Champaign');
+});
+
+test('every reviewed region still composes one searchable Brave site-filter query', () => {
+  // Mirrors the general query shape in research-discovery.queryFor, which rejects queries over 400 characters or 50 terms.
+  for (const [region, hosts] of Object.entries(OFFICIAL_HOSTS_BY_REGION)) {
+    const siteFilter = hosts.length === 1 ? `site:${hosts[0]}` : `(${hosts.map((host) => `site:${host}`).join(' OR ')})`;
+    const baseQuery = `${siteFilter} (faculty directory OR professor profile) research MSc ${region}`;
+    assert.ok(baseQuery.length <= 400, `${region} base query is ${baseQuery.length} characters`);
+    assert.ok(baseQuery.split(/\s+/).length <= 50, `${region} base query has ${baseQuery.split(/\s+/).length} terms`);
+  }
 });
 
 test('discovery searches every configured region and persists official-host results as review-gated leads', async () => {

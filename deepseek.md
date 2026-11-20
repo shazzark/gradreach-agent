@@ -551,3 +551,40 @@ npm run typecheck
   `c4254dc`). PR run `44812808162` and post-merge push run `44812998201` (head `dd06a57`) both completed `success`:
   "Typecheck and unit tests" 27 s and 35 s, "MongoDB integration" 43 s and 46 s. Local `main` was re-synced to
   `dd06a57`. The only annotation is the Node 20 action deprecation warning; the Node 22 to 24 bump remains open.
+
+## Batch 6 — R7 (Allowlist Expansion)
+
+- **What changed:** A-03 says the 200-professor objective is unreachable because the exact-host allowlist covered only one
+  reviewed university in most regions. Ten already-covered regions now carry three to five verified institutions each, so a
+  single-region search can match several official computing departments instead of one.
+  - `src/config/official-host-allowlist.ts` grows from 51 to 91 exact hosts across the same 42 regions; the array format,
+    the exact-host matching rule, and the HTTPS-only policy are unchanged.
+  - `OFFICIAL_INSTITUTION_BY_HOST` (new) records the institution for each added host, and
+    `institutionForOfficialSource(region, sourceUrl)` resolves affiliation from the exact source host first, then falls back
+    to `OFFICIAL_INSTITUTION_BY_REGION`. `automatic-discovery.ts` and `professor-research-evidence.ts` now use it, so a
+    Carnegie Mellon professor is no longer labelled "University of Illinois Urbana-Champaign" just because both are in the
+    United States.
+  - `test/research-discovery.test.ts` asserts the reviewed UK list, bare-lowercase unique hostnames, a reviewed institution
+    for every host, host-specific attribution for five regions, and a Brave-compatible single-query site filter per region.
+- **Countries expanded:** United States +5, United Kingdom +5, Canada +5, Germany +5, Australia +3, Netherlands +4,
+  Switzerland +3, Sweden +3, France +2, Italy +5.
+- **Number of new hosts added:** 40 (51 → 91). Japan was deliberately left at its seven reviewed hosts because its site
+  filter is already the longest at 219 characters.
+- **Verification:**
+  - `npm run typecheck` exits 0.
+  - `npm test`: 320 tests, 319 pass, 0 fail, 1 opt-in skip (`SCHEMA INTEGRATION` MongoDB suite is the skipped one; the new
+    allowlist and attribution assertions run in the default suite).
+  - Every added host was requested over HTTPS on 2026-11-20 with `curl` (`Accept: text/html`, no credentials) and the
+    observed status and page title are recorded per row in `docs/phase-3-allowlist.md`. No live search or database write
+    was performed for this batch.
+  - Rejected candidates that look plausible but failed the policy: `cs.stanford.edu` (301 to `www.cs.stanford.edu`),
+    `cs.toronto.edu` (302 to `web.cs.toronto.edu`), `www.tu-berlin.de` (301 to `www.tu.berlin`), `www.di.unipi.it` (301 to
+    `di.unipi.it`), `cs.queensu.ca` (301 to `www.cs.queensu.ca`), plus `www.imperial.ac.uk`, `www.ucl.ac.uk`,
+    `www.ualberta.ca`, `www.unimelb.edu.au`, and `www.monash.edu`, which answered HTTP 403 to the same client shape the
+    discovery fetcher uses. France stayed at two additions because no further French computer-science page could be
+    confirmed on an exact host.
+  - The longest site filter after expansion is still Japan at 219 characters; the region budget test keeps every
+    single-search query inside the 400-character and 50-term limits enforced by `queryFor`.
+  - No dependencies were added, no provider or scheduler behaviour changed, and the daily-send cap is untouched.
+- **Git:** branch `phase-6/allowlist-expansion`; the PR and rebase-merge evidence is recorded in the follow-up commit once
+  CI reports.
