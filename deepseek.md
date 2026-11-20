@@ -485,6 +485,19 @@ npm run typecheck
   regions × runs × saves table, budget math); `docs/implementation-plan.md`
   phase-9 rows/status/log updated to the new envelope; corrected the stale
   "required checks not configured" note in this file.
-- **Commits:** `phase-4: expand discovery limits and enable schedule for
-  200-professor goal` (not pushed).
+- **Commits:** `c041869 phase-4: expand discovery limits and enable
+  schedule for 200-professor goal` and `0dbad8d docs: record retained discovery
+  scheduler env gate`, both pushed to `origin/main`.
+- **Worker gate:** kept deliberately (owner decision, 2026-11-20). The saved
+  schedule defaults to enabled, but `GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true`
+  is still required before the worker loop can spend provider credit; the
+  decision is written into `docs/phase-8-discovery-envelope.md` and the worker
+  entry point so a later envelope change does not delete it.
+- **Post-push CI:** run `44808397197` (push of `0dbad8d`) and run
+  `44805633203` (push of `7ae2d78`) both completed `success` on both jobs,
+  "Typecheck and unit tests" and "MongoDB integration". Both pushes reported
+  "2 of 2 required status checks are expected" and completed through the
+  branch-protection bypass list, so CI confirms `main` after the fact instead of
+  gating it; trimming the bypass actors in repository settings is still open.
+  The only remaining CI annotation is the Node 20 action deprecation warning.
 
