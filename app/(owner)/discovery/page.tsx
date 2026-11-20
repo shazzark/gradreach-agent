@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { saveDiscoveryScheduleAction, toggleDiscoveryPauseAction } from '../../actions.ts';
 import { withOwnerData } from '../../../src/web/owner-data.ts';
 import { getAutomaticDiscoverySettings } from '../../../src/web/owner-workflows.ts';
-import { DISCOVERY_LIMITS, discoveryRunFailureLabel } from '../../../src/application/automatic-discovery.ts';
+import { DISCOVERY_LIMITS, MAX_DAILY_SEARCHES, discoveryRunFailureLabel } from '../../../src/application/automatic-discovery.ts';
 import { ui } from '../../../src/web/ui-classes.ts';
 
 export const metadata: Metadata = { title: { absolute: 'GradReach | Discovery schedule' } };
@@ -12,7 +12,7 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
     withOwnerData(getAutomaticDiscoverySettings), searchParams,
   ]);
   return <main className="min-w-0">
-    <div className={ui.pageHead}><div><p className={ui.eyebrow}>Phase 9 · Automatic research</p><h1 className={ui.pageTitle}>Discovery schedule</h1><p className={ui.pageDescription}>Choose when to inspect official pages and search one evidence-backed country. Automatic research is off until you enable it here.</p></div><span className={ui.status}>{schedule.enabled && !schedule.paused ? 'Enabled' : 'Disabled / paused'}</span></div>
+    <div className={ui.pageHead}><div><p className={ui.eyebrow}>Phase 9 · Automatic research</p><h1 className={ui.pageTitle}>Discovery schedule</h1><p className={ui.pageDescription}>Choose when to inspect official pages and search evidence-backed countries. Automatic research is now enabled by default on one bounded run per due slot; the worker still needs its separate deployment opt-in.</p></div><span className={ui.status}>{schedule.enabled && !schedule.paused ? 'Enabled' : 'Disabled / paused'}</span></div>
     {query.state === 'unavailable' ? <p className={ui.warning} role="status">The discovery settings could not be updated. No discovery job was started.</p> : query.state === 'saved' ? <p className={ui.note} role="status">Discovery settings updated. A worker still requires its separate deployment opt-in.</p> : null}
     <section className={`${ui.grid} ${ui.section}`}>
       <article className={`${ui.panel} xl:col-span-2`}>
@@ -22,9 +22,9 @@ export default async function DiscoveryPage({ searchParams }: { searchParams: Pr
           <label className={ui.formLabel}>Day (weekly)<select className={ui.input} name="dayOfWeek" defaultValue={schedule.dayOfWeek}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => <option value={index} key={day}>{day}</option>)}</select></label>
           <label className={ui.formLabel}>Local time<input className={ui.input} type="time" name="time" defaultValue={schedule.time} required/></label>
           <label className={ui.formLabel}>Timezone<input className={ui.input} name="timeZone" defaultValue={schedule.timeZone || 'Africa/Lagos'} required/><span className="text-xs font-normal text-muted">Use an IANA timezone, for example Africa/Lagos.</span></label>
-          <fieldset className={`${ui.fieldset} md:col-span-2`}><legend className="px-1 text-sm font-semibold">Countries with verified official hosts</legend><div className="grid min-w-0 grid-cols-1 gap-x-5 sm:grid-cols-2 xl:grid-cols-3">{verifiedCountries.map((country) => <label key={country} className={ui.checkRow}><input type="checkbox" name="countries" value={country} defaultChecked={schedule.countries.includes(country)}/><span className="break-words">{country}</span></label>)}</div>{verifiedCountries.length === 0 ? <p className={ui.muted}>No configured countries have a verified official host yet.</p> : null}</fieldset>
+          <fieldset className={`${ui.fieldset} md:col-span-2`}><legend className="px-1 text-sm font-semibold">Countries with verified official hosts</legend><div className="grid min-w-0 grid-cols-1 gap-x-5 sm:grid-cols-2 xl:grid-cols-3">{verifiedCountries.map((country) => <label key={country} className={ui.checkRow}><input type="checkbox" name="countries" value={country} defaultChecked={schedule.countries.includes(country)}/><span className="break-words">{country}</span></label>)}</div>{verifiedCountries.length === 0 ? <p className={ui.muted}>No configured countries have a verified official host yet.</p> : null}{schedule.countries.length === 0 ? <p className={ui.muted}>No country is selected, so every configured country with a verified host is used in saved order.</p> : null}</fieldset>
           <label className="flex items-center gap-2 text-sm font-semibold md:col-span-2"><input type="checkbox" name="enabled" defaultChecked={schedule.enabled}/> Enable scheduled discovery</label>
-          <div className="flex flex-wrap items-center gap-2 md:col-span-2"><button className={ui.primaryButton} type="submit">Save schedule</button><span className="text-xs text-muted">Each due run: at most {DISCOVERY_LIMITS.searchesPerRun} search × {DISCOVERY_LIMITS.resultsPerSearch} results and {DISCOVERY_LIMITS.inspectionsPerRun} read-only inspections.</span></div>
+          <div className="flex flex-wrap items-center gap-2 md:col-span-2"><button className={ui.primaryButton} type="submit">Save schedule</button><span className="text-xs text-muted">Each due run: at most {DISCOVERY_LIMITS.searchesPerRun} searches × {DISCOVERY_LIMITS.resultsPerSearch} results and {DISCOVERY_LIMITS.inspectionsPerRun} read-only inspections, capped at {MAX_DAILY_SEARCHES} searches per local day.</span></div>
         </form>
         <form action={toggleDiscoveryPauseAction} className="mt-4 border-t border-line pt-4"><button className={schedule.paused ? ui.secondaryButton : ui.dangerButton} type="submit">{schedule.paused ? 'Unpause automatic research' : 'Pause automatic research'}</button></form>
       </article>

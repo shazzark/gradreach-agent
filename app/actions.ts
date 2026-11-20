@@ -64,7 +64,7 @@ export async function saveDiscoveryScheduleAction(form: FormData): Promise<never
       const schedule: DiscoverySchedule = {
         ...DEFAULT_DISCOVERY_SCHEDULE,
         enabled: form.get('enabled') === 'on',
-        paused: (await repositories.discoverySchedule.get())?.paused ?? true,
+        paused: (await repositories.discoverySchedule.get())?.paused ?? DEFAULT_DISCOVERY_SCHEDULE.paused,
         frequency: text(form, 'frequency') as DiscoverySchedule['frequency'],
         dayOfWeek: day,
         time: text(form, 'time'),

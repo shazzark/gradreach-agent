@@ -356,12 +356,16 @@ variables between gate experiments.
 
 ## Open items carried forward
 
-- R5–R8 and R10–R12 in `AUDIT.md` are untouched.
+- R6 is closed (Batch 3) and R5 is closed (Batch 4); R7–R8 and R10–R12 in
+  `AUDIT.md` remain untouched.
 - Lint/Prettier/Vitest/coverage stays a separate, explicitly deferred phase; no
   dependency or npm script was added here.
-- The workflow has one green run (`44799955899`, both jobs). Required status
-  checks and branch protection on `main` are repository settings, not files —
-  configure them if CI should be blocking.
+- The workflow has one green run (`44799955899`, both jobs), and `main` does
+  require two status checks. The Batch 3 push reported "2 of 2 required status
+  checks are expected" and still completed because the pushing account is on the
+  branch-protection bypass list. Local evidence for `7ae2d78` is green, but CI
+  did not gate that push. Trim the bypass actors in GitHub repository settings
+  if checks should block, and confirm the Actions run for `7ae2d78`.
 - The integration job pulls `mongo:7` from Docker Hub anonymously. If runner
   egress blocks that image, pin an approved registry mirror.
 - The fail-loud error surfaces after the driver's default 30-second
@@ -429,4 +433,53 @@ npm run typecheck
 - **Commits:** `docs: add brave 422 diagnosis`,
   `fix: resolve brave search 422 responses and add provider backoff`,
   `docs: record batch 3 in hand-off log`.
+
+## Batch 4 — R5 (Discovery Operating Envelope)
+
+- **What limits were raised:** `DISCOVERY_LIMITS` went from
+  `{ searchesPerRun: 1, resultsPerSearch: 3, inspectionsPerRun: 5 }` to
+  `{ searchesPerRun: 5, resultsPerSearch: 10, inspectionsPerRun: 20 }`. Twenty
+  inspections per run means ten fully successful runs can reach the
+  200-professor target, against at least forty runs before. The five-search
+  ceiling matches one-sweep mode, which claims up to five countries and spends
+  exactly one search per country on the current targeting path; the result cap
+  per request rose from three to ten.
+- **Schedule status:** `DEFAULT_DISCOVERY_SCHEDULE` is now
+  `enabled: true, paused: false, frequency: 'daily'` at 09:00
+  `Africa/Lagos` with `countries: []`. An empty country list is now documented
+  as "every configured country with a verified host, in saved order", and
+  `validateDiscoverySchedule` no longer rejects an enabled schedule with an
+  empty list (previously it threw, which would have broken the new default).
+  The single-country path falls back to configured ∩ verified countries when
+  the saved list is empty. The worker still needs its own
+  `GRADREACH_DISCOVERY_SCHEDULER_ENABLED=true` deployment opt-in, and the owner
+  can pause or narrow the schedule from `/discovery`, whose copy and limit
+  hint were updated to match.
+- **Provider budget guard:** new `MAX_DAILY_SEARCHES = 20` plus
+  `searchesUsedOnDay(schedule, runs, now)`, which sums `counts.searches` from
+  persisted runs started on the schedule-local date and ignores unparseable
+  timestamps. `runAutomaticDiscovery` checks it before claiming a slot, so a
+  spent day returns `state: 'budget_exhausted'` with `searchesUsedToday`
+  without calling the provider or writing a run. Inside a run, each country's
+  `maxSearches` is the smaller of the per-run limit and the remaining budget,
+  so a partially spent day shortens the batch and leaves unsearched countries
+  queued instead of marking them attempted.
+- **Verification:** `npm run typecheck` exit 0. `npm test` 301 tests, 300
+  passed, 1 skipped (opt-in MongoDB integration), 0 failed. Focused
+  `node --experimental-strip-types --test test/automatic-discovery.test.ts`
+  20/20. Tests updated for the new caps (result `count: 10`, six and seven
+  inspections instead of five, progress totals `1/5/20`); new tests cover the
+  enabled default, empty-country validation, `searchesUsedOnDay` day/legacy
+  handling, a spent budget (`budget_exhausted`, zero provider calls, slot
+  unclaimed), a partial budget truncating a batch to one search and requeueing
+  `['Canada', 'Japan']`, and empty-list rotation. The daily five-email cap,
+  exact-host policy, provider backoff, and dependencies are unchanged. No live
+  search, scheduler start, MongoDB write, or email was performed, so the 200
+  target remains a documented ceiling, not a measured result.
+- **Docs:** new `docs/phase-8-discovery-envelope.md` (limits, reasoning,
+  regions × runs × saves table, budget math); `docs/implementation-plan.md`
+  phase-9 rows/status/log updated to the new envelope; corrected the stale
+  "required checks not configured" note in this file.
+- **Commits:** `phase-4: expand discovery limits and enable schedule for
+  200-professor goal` (not pushed).
 

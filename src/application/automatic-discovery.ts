@@ -93,10 +93,17 @@ export interface DiscoveryRun {
   failureCode?: string;
 }
 
+// Automatic research is enabled by default on a daily slot now that the provider 422 defect is fixed; see
+// docs/phase-6-brave-422-diagnosis.md. An empty country list means every configured country with a verified official host,
+// and the owner can still pause or disable the schedule from /discovery.
 export const DEFAULT_DISCOVERY_SCHEDULE: DiscoverySchedule = {
-  enabled: false, paused: true, frequency: 'weekly', dayOfWeek: 1, time: '09:00', timeZone: 'Africa/Lagos', countries: [],
+  enabled: true, paused: false, frequency: 'daily', dayOfWeek: 1, time: '09:00', timeZone: 'Africa/Lagos', countries: [],
 };
-export const DISCOVERY_LIMITS = { searchesPerRun: 1, resultsPerSearch: 3, inspectionsPerRun: 5 } as const;
+// Operating envelope documented in docs/phase-8-discovery-envelope.md. A scheduled run searches each country in its batch
+// once, so a five-country batch spends at most five search requests and inspects up to twenty saved official profiles.
+export const DISCOVERY_LIMITS = { searchesPerRun: 5, resultsPerSearch: 10, inspectionsPerRun: 20 } as const;
+/** Hard ceiling on search requests per schedule-local calendar day, independent of the per-run limits. */
+export const MAX_DAILY_SEARCHES = 20;
 
 // Search-provider failure kinds. They are named for the owner instead of being reported as a bare
 // transport code, so a failed request never looks like a run that simply found nothing.
@@ -124,7 +131,8 @@ export function validateDiscoverySchedule(value: DiscoverySchedule, configuredCo
   try { new Intl.DateTimeFormat('en', { timeZone: value.timeZone }); } catch { throw new Error('timeZone must be a valid IANA timezone'); }
   if (!Array.isArray(value.countries) || value.countries.length > 45 || new Set(value.countries).size !== value.countries.length ||
       value.countries.some((country) => !configuredCountries.includes(country))) throw new Error('countries must be unique configured countries');
-  if (value.enabled && value.countries.length === 0) throw new Error('an enabled schedule requires at least one configured country');
+  // An enabled schedule may leave `countries` empty: scheduled runs then rotate through every configured country with a
+  // verified official host, which is the default state of a fresh schedule.
   return structuredClone(value);
 }
 
@@ -139,6 +147,19 @@ export function discoverySlot(schedule: DiscoverySchedule, now: Date): string | 
   const local = localParts(now, schedule.timeZone);
   if (`${local.hour}:${local.minute}` !== schedule.time || (schedule.frequency === 'weekly' && local.day !== schedule.dayOfWeek)) return undefined;
   return `${local.date}T${schedule.time}[${schedule.timeZone}]`;
+}
+
+/**
+ * Search requests already spent on the schedule's local calendar day, read from persisted runs. Bounded by the run history
+ * the caller loaded, which is enough because each local-time slot can be claimed only once.
+ */
+export function searchesUsedOnDay(schedule: DiscoverySchedule, runs: DiscoveryRun[], now: Date): number {
+  const day = localParts(now, schedule.timeZone).date;
+  return runs.reduce((total, run) => {
+    const startedAt = Date.parse(run.startedAt);
+    if (!Number.isFinite(startedAt) || localParts(new Date(startedAt), schedule.timeZone).date !== day) return total;
+    return total + (Number.isInteger(run.counts?.searches) && run.counts.searches > 0 ? run.counts.searches : 0);
+  }, 0);
 }
 
 export interface AutomaticDiscoveryRepositories {
@@ -247,7 +268,10 @@ function safeAutomaticDiagnostic(value: DiscoveryResultDiagnostic): DiscoveryRes
   };
 }
 
-async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: string, slot: string, now: Date, runId: string, slotId = runId): Promise<DiscoveryRun | undefined> {
+async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: string, slot: string, now: Date, runId: string, options: { slotId?: string; searchBudget?: number } = {}): Promise<DiscoveryRun | undefined> {
+  const slotId = options.slotId ?? runId;
+  // A run never exceeds the per-run limit, even when the remaining daily budget is larger.
+  const searchBudget = Math.min(Math.max(1, options.searchBudget ?? DISCOVERY_LIMITS.searchesPerRun), DISCOVERY_LIMITS.searchesPerRun);
   const counts = emptyDiscoveryCounts();
   const run: DiscoveryRun = { id: runId, slotId, workerId: input.workerId ?? `pid:${process.pid}`, ...(input.taskName ? { taskName: input.taskName } : {}), trigger: 'scheduled', runKind: 'country', scheduledFor: slot, startedAt: now.toISOString(), country, state: 'running', counts };
   if (!await input.repositories.runs.claim(run)) return undefined;
@@ -286,7 +310,7 @@ async function runDiscoveryCountry(input: AutomaticDiscoveryInput, country: stri
         countryCodesByRegion: input.countryCodesByRegion,
         oneSearchPerRegion: true,
         oneQueryPerRegion: true,
-        maxSearches: DISCOVERY_LIMITS.searchesPerRun,
+        maxSearches: searchBudget,
         resultsPerQuery: DISCOVERY_LIMITS.resultsPerSearch,
         maxPagesPerQuery: 1,
         onSearchTargeting: async (target) => { targetingMode = target.mode; searchesStarted += 1; counts.searches = searchesStarted; await persistProgress(); },
@@ -441,6 +465,9 @@ export async function runAutomaticDiscovery(input: AutomaticDiscoveryInput) {
       await input.repositories.schedule.save({ ...current, enabled: false, paused: true, countries: [] });
       return { state: 'paused' as const, counts, countries };
     }
+    const usedToday = searchesUsedOnDay(current, recoveredRuns, now);
+    if (usedToday >= MAX_DAILY_SEARCHES) return { state: 'budget_exhausted' as const, counts, searchesUsedToday: usedToday };
+    let remainingSearches = MAX_DAILY_SEARCHES - usedToday;
     const runId = `discovery:${slot}`;
     const batch: DiscoveryRun = { id: runId, slotId: slot, workerId: input.workerId ?? `pid:${process.pid}`, ...(input.taskName ? { taskName: input.taskName } : {}), trigger: 'scheduled', runKind: 'batch', scheduledFor: slot, startedAt: now.toISOString(), countries,
       state: 'running', counts };
@@ -448,8 +475,10 @@ export async function runAutomaticDiscovery(input: AutomaticDiscoveryInput) {
     if (!await input.repositories.runs.claim(batch)) return { state: 'duplicate' as const, counts, countries: [] };
     const outcomes: NonNullable<DiscoveryRun['countryOutcomes']> = [];
     for (const country of countries) {
+      if (remainingSearches <= 0) break;
       const countryRunId = `${runId}:country:${country}`;
-      const countryRun = await runDiscoveryCountry(input, country, slot, now, countryRunId, runId);
+      const countryRun = await runDiscoveryCountry(input, country, slot, now, countryRunId, { slotId: runId, searchBudget: remainingSearches });
+      remainingSearches -= countryRun?.counts.searches ?? 0;
       const outcome = { country, runId: countryRunId, state: countryRun?.state === 'completed' ? 'completed' as const : 'failed' as const,
         ...(countryRun?.failureCode ? { failureCode: countryRun.failureCode } : !countryRun ? { failureCode: 'duplicate_country_claim' } : {}),
         counts: countryRun?.counts ?? emptyDiscoveryCounts() };
@@ -469,12 +498,16 @@ export async function runAutomaticDiscovery(input: AutomaticDiscoveryInput) {
     return completed;
   }
 
-  const countries = current.countries.filter((country) => input.configuredCountries.includes(country) && input.verifiedCountries.includes(country));
+  const usedToday = searchesUsedOnDay(current, previousRuns, now);
+  if (usedToday >= MAX_DAILY_SEARCHES) return { state: 'budget_exhausted' as const, counts, searchesUsedToday: usedToday };
+  // An empty country list is the documented default: rotate through every configured country with a verified host.
+  const scheduledCountries = current.countries.length ? current.countries : input.configuredCountries;
+  const countries = scheduledCountries.filter((country) => input.configuredCountries.includes(country) && input.verifiedCountries.includes(country));
   if (countries.length === 0) return { state: 'failed' as const, counts, failureCode: 'no_verified_country' };
   const priorCountry = previousRuns.find((run) => run.state === 'completed')?.country;
   const previousIndex = countries.indexOf(priorCountry ?? '');
   const country = countries[previousIndex < 0 ? 0 : (previousIndex + 1) % countries.length]!;
-  const singleRun = await runDiscoveryCountry(input, country, slot, now, `discovery:${slot}`);
+  const singleRun = await runDiscoveryCountry(input, country, slot, now, `discovery:${slot}`, { searchBudget: MAX_DAILY_SEARCHES - usedToday });
   return singleRun ?? { state: 'duplicate' as const, counts };
 }
 

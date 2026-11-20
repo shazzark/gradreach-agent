@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseApplicantProfile } from '../src/domain/applicant-profile.ts';
 import type { ProfessorCandidate } from '../src/domain/outreach-queue.ts';
-import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, discoveryRunFailureLabel, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, selectNextDiscoveryBatch, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
+import { DEFAULT_DISCOVERY_SCHEDULE, DISCOVERY_LIMITS, MAX_DAILY_SEARCHES, discoveryRunFailureLabel, discoverySlot, inspectSavedUnreviewedLeads, runAutomaticDiscovery, searchesUsedOnDay, selectNextDiscoveryBatch, validateDiscoverySchedule, type DiscoveryRun, type DiscoverySchedule } from '../src/application/automatic-discovery.ts';
 import { failureForHttpStatus } from '../src/infrastructure/sanitized-failure.ts';
 import { OFFICIAL_HOSTS_BY_REGION } from '../src/config/official-host-allowlist.ts';
 import { firstVerifiedTargetCountries, nextVerifiedTargetCountries } from '../src/domain/discovery-country-coverage.ts';
@@ -65,19 +65,22 @@ test('manual batch cursor selects the next five verified countries without repea
   assert.throws(() => nextVerifiedTargetCountries(countries, OFFICIAL_HOSTS_BY_REGION, 'Belgium', 0), /limit/);
 });
 
-test('schedule defaults disabled, paused, and starts in Africa/Lagos', () => {
-  assert.deepEqual(DEFAULT_DISCOVERY_SCHEDULE, { enabled: false, paused: true, frequency: 'weekly', dayOfWeek: 1, time: '09:00', timeZone: 'Africa/Lagos', countries: [] });
+test('schedule defaults enabled, daily, unpaused, and starts in Africa/Lagos', () => {
+  assert.deepEqual(DEFAULT_DISCOVERY_SCHEDULE, { enabled: true, paused: false, frequency: 'daily', dayOfWeek: 1, time: '09:00', timeZone: 'Africa/Lagos', countries: [] });
+  assert.equal(validateDiscoverySchedule(DEFAULT_DISCOVERY_SCHEDULE, ['Japan']).enabled, true, 'an enabled schedule may start with no country selection');
+  assert.equal(MAX_DAILY_SEARCHES, 20);
 });
 
 test('frequency, timezone, configured-country selection, and request limits are validated', () => {
   assert.equal(discoverySlot({ ...DEFAULT_DISCOVERY_SCHEDULE, frequency: 'daily', time: '09:00' }, new Date('2026-11-04T08:00:00.000Z')), '2026-11-04T09:00[Africa/Lagos]');
-  assert.equal(discoverySlot({ ...DEFAULT_DISCOVERY_SCHEDULE, time: '09:00', dayOfWeek: 1 }, new Date('2026-11-04T08:00:00.000Z')), undefined);
+  assert.equal(discoverySlot({ ...DEFAULT_DISCOVERY_SCHEDULE, frequency: 'weekly', time: '09:00', dayOfWeek: 1 }, new Date('2026-11-04T08:00:00.000Z')), undefined);
   assert.throws(() => validateDiscoverySchedule({ ...DEFAULT_DISCOVERY_SCHEDULE, timeZone: 'Mars/Olympus' }, ['Japan']), /timezone/i);
   assert.throws(() => validateDiscoverySchedule({ ...DEFAULT_DISCOVERY_SCHEDULE, countries: ['Monaco'] }, ['Japan']), /configured countries/i);
-  assert.deepEqual(DISCOVERY_LIMITS, { searchesPerRun: 1, resultsPerSearch: 3, inspectionsPerRun: 5 });
+  assert.deepEqual(DISCOVERY_LIMITS, { searchesPerRun: 5, resultsPerSearch: 10, inspectionsPerRun: 20 });
+  assert.equal(DISCOVERY_LIMITS.inspectionsPerRun * 10, 200, 'ten full runs cover the 200-professor goal');
 });
 
-test('pause blocks provider calls and a due run inspects at most five pages without changing candidates', async () => {
+test('pause blocks provider calls and a due run inspects unreviewed pages without changing candidates', async () => {
   const savedCandidates = Array.from({ length: 6 }, (_, index) => candidate(`lead-${index}`));
   const humanDecided = { ...candidate('accepted-by-human'), discoveryReview: { decision: 'accepted' as const, reviewedAt: '2026-11-03T10:00:00.000Z' } };
   const humanApproved = { ...candidate('approved-by-human'), status: 'approved' as const, approvedForSending: true, approvedAt: '2026-11-03T10:00:00.000Z' };
@@ -91,7 +94,7 @@ test('pause blocks provider calls and a due run inspects at most five pages with
     configuredCountries: ['Japan'], verifiedCountries: ['Japan'],
     officialHostsByRegion: Object.fromEntries(Object.entries(OFFICIAL_HOSTS_BY_REGION).map(([country, hosts]) => [country, [...hosts]])),
     countryCodesByRegion: { Japan: 'JP' },
-    provider: { async search(_query: string, options?: { count?: number }) { searches += 1; assert.equal(options?.count, 3); return []; } },
+    provider: { async search(_query: string, options?: { count?: number }) { searches += 1; assert.equal(options?.count, 10); return []; } },
     fetchPage: async (url: string) => { fetches += 1; return { url, html: '<p>Research focuses on distributed computing systems and their applications.</p>' }; },
     now: new Date('2026-11-04T08:00:00.000Z'),
   };
@@ -102,8 +105,8 @@ test('pause blocks provider calls and a due run inspects at most five pages with
   assert.equal(run.state, 'completed');
   assert.equal(run.targetingMode, 'query_and_host');
   assert.equal(searches, 1);
-  assert.equal(fetches, 5);
-  assert.equal(run.counts.inspected, 5);
+  assert.equal(fetches, 6);
+  assert.equal(run.counts.inspected, 6);
   assert.equal(data.schedule.enabled, false);
   assert.equal(data.schedule.paused, true);
   assert.deepEqual(data.schedule.countries, []);
@@ -143,7 +146,7 @@ test('one-sweep daily run claims up to five saved-order countries with one searc
     officialHostsByRegion: Object.fromEntries(countries.map((country) => [country, [...OFFICIAL_HOSTS_BY_REGION[country as keyof typeof OFFICIAL_HOSTS_BY_REGION]]])),
     countryCodesByRegion: { Belgium: 'BE', 'Bosnia and Herzegovina': 'BA', Bulgaria: 'BG', Croatia: 'HR', Czechia: 'CZ', Denmark: 'DK', Estonia: 'EE' },
     provider: { async search(_query: string, options?: { region?: string; count?: number }) {
-      assert.equal(options?.count, 3);
+      assert.equal(options?.count, 10);
       searched.push(options?.region ?? '');
       if (options?.region === 'Bulgaria') throw new Error('synthetic provider failure');
       return [];
@@ -244,7 +247,7 @@ test('scheduled rechecks append dated recommendations and preserve saved candida
   assert.equal(data.candidateSaves, 0);
 });
 
-test('manual evidence inspection is search-free, inspects at most five leads, and preserves decisions', async () => {
+test('manual evidence inspection is search-free, inspects the saved undecided leads, and preserves decisions', async () => {
   const undecided = Array.from({ length: 7 }, (_, index) => {
     const item = candidate(`manual-${index}`);
     item.professorName = index === 2 ? 'Missing Person' : 'Ada Lovelace';
@@ -269,14 +272,14 @@ test('manual evidence inspection is search-free, inspects at most five leads, an
       return { url, html: '<h1>Ada Lovelace</h1><p>Ada Lovelace is a Professor who researches distributed systems that preserve service availability during regional network failures.</p>' };
     },
   });
-  assert.equal(fetches, 5);
+  assert.equal(fetches, 7);
   assert.equal(result.counts.searches, 0);
-  assert.equal(result.counts.inspected, 5);
-  assert.equal(result.matched, 3);
+  assert.equal(result.counts.inspected, 7);
+  assert.equal(result.matched, 5);
   assert.equal(result.uncertain, 1);
   assert.equal(result.unlikely, 1);
-  assert.equal(result.pending, 2);
-  assert.equal(data.checks.size, 5);
+  assert.equal(result.pending, 0);
+  assert.equal(data.checks.size, 7);
   assert.deepEqual(allCandidates, before);
 });
 
@@ -318,7 +321,7 @@ test('scheduled discovery publishes bounded progress only after claiming and per
   const result = await runAutomaticDiscovery({
     repositories: data.repositories, configuredCountries: ['Japan'], verifiedCountries: ['Japan'],
     officialHostsByRegion: { Japan: [...OFFICIAL_HOSTS_BY_REGION.Japan] }, countryCodesByRegion: { Japan: 'JP' },
-    provider: { async search(_query, options) { assert.equal(options?.count, 3); return []; } },
+    provider: { async search(_query, options) { assert.equal(options?.count, 10); return []; } },
     fetchPage: async (url: string) => ({ url, html: '<p>Research group</p>' }),
     now: new Date('2026-11-04T08:00:00.000Z'),
     onProgress(event) {
@@ -331,6 +334,74 @@ test('scheduled discovery publishes bounded progress only after claiming and per
     'running:starting', 'running:searching', 'running:saving_candidates', 'running:persisting_checks', 'completed:completed',
   ]);
   assert.ok(events.every(({ jobId }) => /^discovery_[A-Za-z0-9_-]{1,64}$/.test(jobId)));
-  assert.ok(events.every(({ total }) => total === 1 || total === 5));
+  assert.ok(events.every(({ total }) => total !== undefined && [1, DISCOVERY_LIMITS.searchesPerRun, DISCOVERY_LIMITS.inspectionsPerRun].includes(total)));
   assert.ok(events.every(({ completed, total }) => completed === undefined || (total !== undefined && completed <= total)));
+});
+
+function seededRun(id: string, startedAt: string, searches: number): DiscoveryRun {
+  return { id, scheduledFor: startedAt, startedAt, state: 'completed',
+    counts: { searches, results: 0, saved: 0, duplicates: 0, rejections: 0, fetchFailures: 0, inspected: 0, inspectionFailures: 0 } };
+}
+
+test('the daily search budget counts only runs started on the schedule-local day', () => {
+  const runs = [
+    seededRun('today-morning', '2026-11-04T07:05:00.000Z', 3),
+    seededRun('today-later', '2026-11-04T08:30:00.000Z', 2),
+    seededRun('yesterday', '2026-11-03T08:30:00.000Z', 9),
+    seededRun('legacy-without-timestamp', '', 4),
+  ];
+  assert.equal(searchesUsedOnDay(DEFAULT_DISCOVERY_SCHEDULE, runs, new Date('2026-11-04T12:00:00.000Z')), 5);
+});
+
+test('a spent daily search budget stops the due run before any provider request', async () => {
+  const data = fakeRepos([], { ...DEFAULT_DISCOVERY_SCHEDULE, countries: ['Japan'] });
+  data.runs.set('today', seededRun('today', '2026-11-04T07:30:00.000Z', MAX_DAILY_SEARCHES));
+  let searches = 0;
+  const result = await runAutomaticDiscovery({
+    repositories: data.repositories, configuredCountries: ['Japan'], verifiedCountries: ['Japan'],
+    officialHostsByRegion: { Japan: [...OFFICIAL_HOSTS_BY_REGION.Japan] }, countryCodesByRegion: { Japan: 'JP' },
+    provider: { async search() { searches += 1; return []; } },
+    fetchPage: async (url) => ({ url, html: '' }),
+    now: new Date('2026-11-04T08:00:00.000Z'),
+  });
+  assert.equal(result.state, 'budget_exhausted');
+  assert.equal('searchesUsedToday' in result ? result.searchesUsedToday : -1, MAX_DAILY_SEARCHES);
+  assert.equal(searches, 0);
+  assert.equal(data.runs.has('discovery:2026-11-04T09:00[Africa/Lagos]'), false, 'an unbudgeted slot must stay unclaimed');
+});
+
+test('a partially spent daily budget limits a sweep batch to its remaining searches', async () => {
+  const countries = ['Belgium', 'Canada', 'Japan'];
+  const savedProfile = { ...profile, applicant: { ...profile.applicant, target: { ...profile.applicant.target, countries } } };
+  const data = fakeRepos([], { ...DEFAULT_DISCOVERY_SCHEDULE, sweepOnce: true, countries }, savedProfile);
+  data.runs.set('today', seededRun('today', '2026-11-04T07:30:00.000Z', MAX_DAILY_SEARCHES - 1));
+  const searched: string[] = [];
+  const result = await runAutomaticDiscovery({
+    repositories: data.repositories, configuredCountries: countries, verifiedCountries: countries,
+    officialHostsByRegion: Object.fromEntries(countries.map((country) => [country, [...OFFICIAL_HOSTS_BY_REGION[country as keyof typeof OFFICIAL_HOSTS_BY_REGION]]])),
+    countryCodesByRegion: { Belgium: 'BE', Canada: 'CA', Japan: 'JP' },
+    provider: { async search(_query: string, options?: { region?: string }) { searched.push(options?.region ?? ''); return []; } },
+    fetchPage: async (url) => ({ url, html: '' }),
+    now: new Date('2026-11-04T08:00:00.000Z'),
+  });
+  assert.equal(result.state, 'completed');
+  assert.deepEqual('countries' in result ? result.countries : [], countries, 'the slot batch is still claimed once');
+  assert.deepEqual(searched, ['Belgium'], 'only the single remaining search request is allowed');
+  assert.equal('countryOutcomes' in result ? result.countryOutcomes?.length : 0, 1);
+  assert.equal(result.counts.searches, 1);
+  assert.deepEqual(data.schedule.countries, ['Canada', 'Japan'], 'unsearched countries stay queued for the next slot');
+});
+
+test('an enabled schedule with no country selection rotates through configured verified countries', async () => {
+  const data = fakeRepos([], { ...DEFAULT_DISCOVERY_SCHEDULE });
+  const searched: string[] = [];
+  const result = await runAutomaticDiscovery({
+    repositories: data.repositories, configuredCountries: ['Japan'], verifiedCountries: ['Japan'],
+    officialHostsByRegion: { Japan: [...OFFICIAL_HOSTS_BY_REGION.Japan] }, countryCodesByRegion: { Japan: 'JP' },
+    provider: { async search(_query: string, options?: { region?: string }) { searched.push(options?.region ?? ''); return []; } },
+    fetchPage: async (url) => ({ url, html: '' }),
+    now: new Date('2026-11-04T08:00:00.000Z'),
+  });
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(searched, ['Japan']);
 });
