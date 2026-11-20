@@ -212,3 +212,176 @@ npm test
   with `phase-N: …` / `fix: …` / `docs: …` messages.
 - Never push without explicit owner authorization.
 - Never add personal data to source, docs, fixtures or this log.
+
+---
+
+# GradReach — Batch 2 hand-off log
+
+Purpose: close audit findings **A-07 (no CI)** and **A-08 (integration safety net
+skipped)** through recommendation **R4**. Read together with `AUDIT.md` (A-07,
+A-08, R4), the Batch 1 log above, and `AGENTS.md`.
+
+Privacy: this file contains no personal identifiers, credentials, email
+addresses, or applicant data. Keep it that way.
+
+## Status snapshot
+
+| Field                 | Value                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| Branch                | `main`                                                                                         |
+| Starting HEAD         | `b3db767` (`docs: record R2 gate outcome …`)                                                   |
+| Working tree at start | Clean (`git status --short` empty), `main` level with `origin/main`                            |
+| Batch                 | 2 — R4 (A-07 CI half, A-08)                                                                    |
+| Skills applied        | `engineering-workflow`, `git-engineering` (global, unmodified)                                 |
+| Dependencies          | Unchanged. No `package.json` / `package-lock.json` edits, no new npm scripts                   |
+| Verification          | `npm run typecheck` exit 0 · `npm test` exit 0 (290 tests, 289 pass, 0 fail, 1 skip) · four-case gate matrix reproduced directly (both absent → skip, URI only → skip, both + unreachable → fail) · `npm run test:mongodb` injection proven |
+| Remote state          | Not pushed. Push is the owner's decision                                                       |
+
+## What changed, precisely
+
+### A-08 — the integration proof keeps its opt-in and fails loudly
+
+- The suite keeps **two gates**. `test/mongo-storage.integration.test.ts`
+  resolves its target through the existing helper
+  `getEnabledMongoTestUri({ enabled: process.env.RUN_MONGODB_INTEGRATION, uri: process.env.MONGODB_TEST_URI })`,
+  which returns the URI only when `RUN_MONGODB_INTEGRATION === 'true'` and
+  `undefined` otherwise. The second gate is a safety layer: a stray
+  `MONGODB_TEST_URI` in `.env` must not make a plain `npm test` write to that
+  deployment.
+- `npm run test:mongodb` is the explicit opt-in. It loads
+  `scripts/enable-mongodb-integration.ts`, whose single job is to set
+  `RUN_MONGODB_INTEGRATION=true`, so the suite runs exactly when a developer or
+  CI asks for it. Using the helper (rather than hand-rolled checks) keeps one
+  definition of the rule, and it is still covered by
+  `test/mongo-test-uri.test.ts`.
+- What A-08 added is fail-loud behavior *inside* that opt-in: once both gates are
+  satisfied, an unreachable deployment fails instead of silently skipping. A
+  plain `npm test` still skips and stays offline.
+- A failed `client.connect()` is wrapped into one assertion error:
+  `MONGODB_TEST_URI is set but MongoDB at <host:port> is unreachable. Start
+  MongoDB at that address, or unset MONGODB_TEST_URI to skip MongoDB integration
+  checks.`
+  The endpoint comes from `client.options.hosts` / `srvHost`, so credentials in
+  the URI are never echoed, and the raw driver error is not attached as a
+  `cause`, so no driver stack internals reach the runner. The existing outer
+  `catch` re-throws this error unchanged (it is identity-checked) instead of
+  re-wrapping it in the diagnostics JSON.
+- `client.close()` is still in the existing `finally`, so it runs even when
+  `connect()` failed. No assertion about reservations, `claimForDelivery`,
+  `recoverStaleSending`, or the legacy-collection guard was modified.
+
+Batch 2 first pass collapsed the two-gate design; corrected to restore the
+RUN_MONGODB_INTEGRATION safety layer while keeping fail-loud behavior. One gap
+then remains by design: a plain `npm test` still skips the only executable proof
+of `reserveDailySend`, `claimForDelivery`, `recoverStaleSending`, and the
+legacy-collection startup guard. Closing it means making that proof runnable
+without a network dependency (an in-memory or embedded stand-in), not deleting
+the safety layer.
+
+### A-07 — first CI workflow
+
+`.github/workflows/ci.yml` (new) has two jobs on `ubuntu-latest`, Node 22,
+`npm ci`, `contents: read`, and per-ref concurrency cancellation:
+
+1. `verify` — `npm run typecheck` then `npm test`. `MONGODB_TEST_URI` is
+   deliberately absent, so the integration test skips and the default suite is
+   proven green.
+2. `mongodb-integration` — a `mongo:7` service with a `mongosh` ping health
+   check, a bounded wait loop on `127.0.0.1:27017`, then `npm run test:mongodb`.
+   This job is the only place `MONGODB_TEST_URI` is set; the second gate
+   (`RUN_MONGODB_INTEGRATION=true`) comes from the npm script itself, so the
+   workflow needs no extra env entry.
+
+`README.md` gained the CI badge only. Lint, Prettier, Vitest, coverage, and the
+oversized `test/research-discovery.test.ts` split (the rest of A-07) are **not**
+part of this batch and remain open.
+
+## Verification evidence
+
+| Case | `MONGODB_TEST_URI` | `RUN_MONGODB_INTEGRATION` | reachable | Observed |
+| --- | --- | --- | --- | --- |
+| A | unset | unset | — | `# SKIP Set MONGODB_TEST_URI and opt in with RUN_MONGODB_INTEGRATION=true …`; `# pass 0 / # fail 0 / # skipped 1`; exit 0 |
+| B (safety layer) | `mongodb://127.0.0.1:27017/gradreach_test` | unset | — | same skip; exit 0 — nothing is contacted |
+| C (fail loud) | `mongodb://127.0.0.1:27017/gradreach_test` | `true` | no listener | `# fail 1`; exit 1; `MONGODB_TEST_URI is set but MongoDB at 127.0.0.1:27017 is unreachable. Start MongoDB at that address, or unset MONGODB_TEST_URI to skip MongoDB integration checks.` |
+| D | supplied by the real local `.env` | unset | — | `npm test` exit 0 — 290 tests, 289 pass, 0 fail, 1 skip; the integration test skips and no network call is made |
+| Injection | `.env` moved aside, synthetic URI | unset in the shell, `npm run test:mongodb` | no listener | exit 1 with the same message, `# fail 1` — proves the npm script still injects `RUN_MONGODB_INTEGRATION=true` |
+| Typecheck | — | — | — | `npm run typecheck` exit 0 |
+| Ignore check | — | — | — | `git check-ignore -v .github/workflows/ci.yml` → no output, exit 1 (not ignored) |
+
+Case D is the decisive one: the local `.env` supplies `MONGODB_TEST_URI`, and the
+default suite still skips because the opt-in flag is absent. `.env` was renamed
+to `.env.batch2fix-verify-backup` for cases A–C and the injection check, then
+restored; no `.env*` artifact remains in `git status`.
+
+One harness note: this agent's PowerShell session persists environment variables
+between commands, so the first `npm test` attempt after case C inherited
+`RUN_MONGODB_INTEGRATION=true` and *ran* the suite (it failed loud at
+`127.0.0.1:27017`; it never touched the deployment named by `.env`). Clearing the
+variable reproduced case D. Any harness that reuses a shell must clear these two
+variables between gate experiments.
+
+## Consequences the owner must know
+
+- **`npm test` stays offline even though `.env` configures `MONGODB_TEST_URI`.**
+  The integration suite also needs `RUN_MONGODB_INTEGRATION=true`, so the default
+  local run and the CI `verify` job skip it. Run `npm run test:mongodb` when you
+  mean to exercise the database.
+- **`npm run test:mongodb` can write to whatever `MONGODB_TEST_URI` names.** The
+  suite asserts the URI targets `gradreach_test` and drops its 13 named test
+  collections at the end, so never point it at a deployment holding real data.
+  CI points it at a disposable `mongo:7` service.
+- **`getEnabledMongoTestUri` is live again.** The integration test consults it, so
+  the helper and `test/mongo-test-uri.test.ts` describe the behavior that ships,
+  and `scripts/enable-mongodb-integration.ts` is the only producer of the opt-in
+  flag.
+- **The live integration job was not executed locally.** Nothing listens on
+  `127.0.0.1:27017` and the Docker daemon is not running on the dev machine, so
+  only the skip and fail-loud paths were exercised here. The first CI run is the
+  end-to-end proof that R4 asks for.
+- **Credential exposure during verification.** While inspecting the local
+  `.env` (ignored, not part of this batch), the agent printed the
+  `MONGODB_TEST_URI` value — including its Atlas password — into the session
+  transcript. Rotate that database user's password before the repository or the
+  transcript is shared. Nothing secret was written to a tracked file.
+
+## Findings status after Batch 2
+
+| Finding | Status | Evidence |
+| --- | --- | --- |
+| A-07 (no CI, no lint, no coverage) | **Partially closed** | `.github/workflows/ci.yml` runs typecheck and unit tests plus a MongoDB integration job. Lint, Prettier, coverage and the test-portfolio imbalance remain open — A-07's other half. |
+| A-08 (integration silently skipped) | **Closed** | Set `MONGODB_TEST_URI` and `RUN_MONGODB_INTEGRATION=true` and the suite runs; if that deployment is unreachable it fails loudly with a host:port message instead of skipping. A URI alone still skips, so local runs stay offline. CI sets the URI and `npm run test:mongodb` supplies the opt-in. |
+
+## Open items carried forward
+
+- R5–R8 and R10–R12 in `AUDIT.md` are untouched.
+- Lint/Prettier/Vitest/coverage stays a separate, explicitly deferred phase; no
+  dependency or npm script was added here.
+- The workflow itself is unverified until the owner pushes; required status
+  checks and branch protection on `main` are repository settings, not files.
+- The integration job pulls `mongo:7` from Docker Hub anonymously. If runner
+  egress blocks that image, pin an approved registry mirror.
+- The fail-loud error surfaces after the driver's default 30-second
+  server-selection timeout (observed: 30.0 s for case C). CI's 20-minute job
+  timeout absorbs that; lowering `serverSelectionTimeoutMS` would shorten the
+  wait but is not part of this batch.
+
+## Commands used for verification
+
+```powershell
+# .env renamed to .env.batch2fix-verify-backup for A-C and the injection check,
+# then restored. This shell persists env vars, so clear them explicitly.
+Remove-Item Env:MONGODB_TEST_URI -ErrorAction SilentlyContinue
+Remove-Item Env:RUN_MONGODB_INTEGRATION -ErrorAction SilentlyContinue
+node --experimental-strip-types --test test/mongo-storage.integration.test.ts   # A: skip, exit 0
+
+$env:MONGODB_TEST_URI = 'mongodb://127.0.0.1:27017/gradreach_test'
+node --experimental-strip-types --test test/mongo-storage.integration.test.ts   # B: skip, exit 0 (safety layer)
+
+$env:RUN_MONGODB_INTEGRATION = 'true'
+node --experimental-strip-types --test test/mongo-storage.integration.test.ts   # C: fail, exit 1, host:port message
+
+Remove-Item Env:MONGODB_TEST_URI, Env:RUN_MONGODB_INTEGRATION
+npm run test:mongodb   # with .env aside and the synthetic URI: fail, exit 1 → proves injection
+npm test               # D: with the real .env: integration test skips
+npm run typecheck
+```
