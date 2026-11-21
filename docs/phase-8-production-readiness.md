@@ -62,6 +62,12 @@ to the JSON status lines so a run can be told apart afterwards. The saved-eviden
 recorded `University of Waterloo` identity remain specific to this single-candidate preview, which is
 why the command is now a `debug:` tool.
 
+## CI
+
+The `verify` job gained a `npm run build:server` step so a broken production compile fails the pull
+request. Its name deliberately stays `Typecheck and unit tests`: that exact string is a required
+status-check context in `main` branch protection, and renaming the job leaves the required check
+permanently unreported, which blocks every pull request without an obvious cause.
 
 ## R12 — production startup no longer needs an experimental flag
 
