@@ -668,3 +668,15 @@ npm run typecheck
 - **Carried forward:** a real hosted `npm start` behind the proxy, the Gmail read-scope re-authorization, and the first
   live `ops:sync-replies` pass all still need the owner.
 
+
+## Batch 9 — PR #7 merge, and a branch-protection trap
+
+- **Why the first merge attempt failed:** `gh pr merge 7 --rebase` returned "the base branch policy prohibits the merge".
+  `main` requires exactly the contexts `Typecheck and unit tests` and `MongoDB integration`, with `enforce_admins: true`,
+  and Batch 8 had renamed the verify job to `Typecheck, build, and unit tests`. A renamed job reports as an unknown
+  context, so the required context never appears and the PR is blocked with no failing check to point at.
+- **Fix:** the verify job name is back to `Typecheck and unit tests`; the `npm run build:server` step and its comment stay.
+  `docs/phase-8-production-readiness.md` now records the rule and the workflow carries a comment, so the next rename attempt
+  is stopped at the source. Patching branch protection to the new name instead would also have worked, but that changes
+  repository settings; a stable context name needs no admin action.
+

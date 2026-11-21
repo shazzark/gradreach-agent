@@ -13,8 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The job name is a required status-check context in branch protection, so it
+  # stays "Typecheck and unit tests" even though the job now also compiles the
+  # server entry points. Renaming it silently blocks every pull request.
   verify:
-    name: Typecheck, build, and unit tests
+    name: Typecheck and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
