@@ -124,3 +124,7 @@ version and the fix.
   not `Missing script`.
 - `npm test` 347 tests, 346 passed, 1 opt-in MongoDB test skipped, 0 failed. New tests:
   `test/runtime-support.test.ts` and the region cases in `test/candidate-review-preview.test.ts`.
+- Merged as [PR #7](https://github.com/shazzark/gradreach-agent/pull/7) by rebase on 2026-11-21; `main` is at `082deb7`.
+  PR checks `Typecheck and unit tests` (24 s) and `MongoDB integration` (40 s) passed in run `44842676358`, and the
+  post-merge push run `44842796061` succeeded in 49 s. The first merge attempt was blocked because the verify job had been
+  renamed away from its required status-check context; the rename was reverted before merging.
