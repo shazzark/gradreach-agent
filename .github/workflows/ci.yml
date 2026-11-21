@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck and unit tests
+    name: Typecheck, build, and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,6 +32,11 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # Proves the production compile (tsconfig.build.json) still emits the
+      # server entry points; dist/ stays gitignored and is not uploaded.
+      - name: Build server entry points
+        run: npm run build:server
 
       # MONGODB_TEST_URI is deliberately not set here, so the integration
       # suite skips and this job proves the default run is green.

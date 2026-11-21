@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { matchingResearchInterests } from '../application/professor-research-evidence.ts';
-import { compareSavedLeadDuplicates, createCandidateReviewPreview, type CandidateReviewIdentity } from '../application/candidate-review-preview.ts';
+import { compareSavedLeadDuplicates, createCandidateReviewPreview, resolveReviewRegion, type CandidateReviewIdentity } from '../application/candidate-review-preview.ts';
 import { connectMongoStorage } from '../infrastructure/mongo-storage.ts';
 import { safeFailureRecord } from '../infrastructure/sanitized-failure.ts';
 
@@ -33,9 +33,24 @@ async function writePrivateReport(value: unknown): Promise<string> {
   return path;
 }
 
+/** Reads `--region <name>` or `--region=<name>` exactly as the discovery pilot does. */
+export function requestedReviewRegion(args: readonly string[]): string | undefined {
+  const regionFlag = args.findIndex((argument) => argument === '--region');
+  const value = regionFlag >= 0
+    ? args[regionFlag + 1]
+    : args.find((argument) => argument.startsWith('--region='))?.slice('--region='.length);
+  return value?.trim() || undefined;
+}
+
 async function run(): Promise<void> {
   let storage: Awaited<ReturnType<typeof connectMongoStorage>> | undefined;
   try {
+    const resolvedRegion = resolveReviewRegion({
+      flag: requestedReviewRegion(process.argv.slice(2)),
+      environment: process.env.GRADREACH_REVIEW_REGION,
+    });
+    if (resolvedRegion.warning) process.stderr.write(`${resolvedRegion.warning}\n`);
+    const region = resolvedRegion.region;
     const [source, evaluation] = await Promise.all([
       readFile(SOURCE_REPORT, 'utf8').then((value) => JSON.parse(value) as ReplayReport),
       readFile(EVALUATION_REPORT, 'utf8').then((value) => JSON.parse(value) as EvaluationReport),
@@ -44,13 +59,13 @@ async function run(): Promise<void> {
     const evaluated = evaluation.candidates.find((candidate) => candidate.recordId === 'candidate-03');
     const profileUrl = 'https://uwaterloo.ca/electrical-computer-engineering/profile/ecreager';
     if (!saved?.identity?.established || saved.identity.sourceUrl !== profileUrl || !saved.research?.supportingExcerpt || saved.research.extractedSourceUrl !== profileUrl || evaluated?.researchGate !== 'matched' || evaluated.matchedInterestCount < 1) {
-      process.stdout.write(`${JSON.stringify({ ok: false, duplicateCheck: 'could not verify', errorCode: 'saved_evidence_incomplete' })}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: false, region, duplicateCheck: 'could not verify', errorCode: 'saved_evidence_incomplete' })}\n`);
       process.exitCode = 1;
       return;
     }
     const identity = identityFromExcerpt(saved.identity.supportingExcerpt, profileUrl);
     if (!identity) {
-      process.stdout.write(`${JSON.stringify({ ok: false, duplicateCheck: 'could not verify', errorCode: 'identity_evidence_invalid' })}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: false, region, duplicateCheck: 'could not verify', errorCode: 'identity_evidence_invalid' })}\n`);
       process.exitCode = 1;
       return;
     }
@@ -61,14 +76,14 @@ async function run(): Promise<void> {
     const interests = [...profile.applicant.target.researchInterests, ...profile.applicant.target.fields];
     const matches = matchingResearchInterests(saved.research.supportingExcerpt, interests);
     if (matches.length === 0) {
-      process.stdout.write(`${JSON.stringify({ ok: false, duplicateCheck: 'could not verify', errorCode: 'saved_interest_match_unconfirmed' })}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: false, region, duplicateCheck: 'could not verify', errorCode: 'saved_interest_match_unconfirmed' })}\n`);
       process.exitCode = 1;
       return;
     }
     const leads = await storage.repositories.candidates.list();
-    const duplicateCheck = compareSavedLeadDuplicates(identity, leads);
+    const duplicateCheck = compareSavedLeadDuplicates(identity, leads, region);
     if (duplicateCheck.result !== 'not found') {
-      process.stdout.write(`${JSON.stringify({ ok: true, duplicateCheck: duplicateCheck.result, inspected: leads.length })}\n`);
+      process.stdout.write(`${JSON.stringify({ ok: true, region, duplicateCheck: duplicateCheck.result, inspected: leads.length })}\n`);
       return;
     }
     const preview = createCandidateReviewPreview({
@@ -78,8 +93,8 @@ async function run(): Promise<void> {
       researchEvidenceSourceUrl: saved.research.extractedSourceUrl!,
       checkedLeadCount: leads.length,
     });
-    const reportPath = await writePrivateReport({ generatedAt: new Date().toISOString(), mode: 'saved_evidence_and_read_only_duplicate_check', webRequests: 0, mongoWrites: 0, ...preview });
-    process.stdout.write(`${JSON.stringify({ ok: true, duplicateCheck: 'not found', inspected: leads.length, reportPath })}\n`);
+    const reportPath = await writePrivateReport({ generatedAt: new Date().toISOString(), mode: 'saved_evidence_and_read_only_duplicate_check', region, webRequests: 0, mongoWrites: 0, ...preview });
+    process.stdout.write(`${JSON.stringify({ ok: true, region, duplicateCheck: 'not found', inspected: leads.length, reportPath })}\n`);
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ ok: false, duplicateCheck: 'could not verify', errorCode: safeFailureRecord(error).kind })}\n`);
     process.exitCode = 1;

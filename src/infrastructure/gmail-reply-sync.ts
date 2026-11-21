@@ -59,9 +59,9 @@ export function createGmailReadClient(options: {
       pendingToken = (options.token ?? gmailReadOnlyAccessToken)().catch((error: unknown) => {
         pendingToken = undefined;
         if (error instanceof GmailTokenScopeError) {
-          throw new GmailReadError('gmail-read-scope-missing', 'Gmail authorization does not include the read-only scope; run npm run gmail:connect again');
+          throw new GmailReadError('gmail-read-scope-missing', 'Gmail authorization does not include the read-only scope; run npm run ops:gmail-connect again');
         }
-        throw new GmailReadError('gmail-read-auth-unavailable', 'Gmail read authorization is unavailable; run npm run gmail:connect again');
+        throw new GmailReadError('gmail-read-auth-unavailable', 'Gmail read authorization is unavailable; run npm run ops:gmail-connect again');
       });
     }
     return pendingToken;

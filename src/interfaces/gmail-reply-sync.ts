@@ -23,7 +23,7 @@ export async function runGmailReplySync(connect: () => Promise<ConnectedMongoSto
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   await runGmailReplySync().catch(() => {
-    process.stderr.write('Reply sync did not complete. Check Gmail authorization (npm run gmail:connect) and MongoDB access.\n');
+    process.stderr.write('Reply sync did not complete. Check Gmail authorization (npm run ops:gmail-connect) and MongoDB access.\n');
     process.exitCode = 1;
   });
 }

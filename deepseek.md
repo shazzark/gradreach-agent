@@ -635,3 +635,36 @@ npm run typecheck
   remains on the remote for reference.
 
 
+
+## Batch 8 — R10 and R12 (Script Cleanup and Production Startup)
+
+- **What changed:** R10 and R12 were the last two open audit items that did not need a live provider.
+  - `package.json` now separates durable operations (`ops:*`) from investigation helpers (`debug:*`), e.g.
+    `ops:outreach-scheduler`, `ops:gmail-connect`, `ops:db-migrate-discovery`, `debug:leads-view`, `debug:discovery-preview:audit`.
+    `test*`, `typecheck`, `build`, `dev`, and `web` keep their names. The full old-to-new table is in
+    `docs/phase-8-production-readiness.md`.
+  - `src/application/candidate-review-preview.ts` no longer imports `OFFICIAL_HOSTS_BY_REGION.Canada`. `resolveReviewRegion`
+    reads `--region <name>` / `--region=<name>`, then `GRADREACH_REVIEW_REGION`, then falls back to `Canada` with an
+    announced stderr warning; `compareSavedLeadDuplicates` and `stableProfileCandidateId` take the region as a parameter and
+    fail closed on an unknown one. The resolved region is written to the report and the status line.
+  - `tsconfig.build.json` (new) compiles `src/interfaces/**/*.ts` to the ignored `dist/` with
+    `allowImportingTsExtensions: false` and `rewriteRelativeImportExtensions: true`; `npm run build:server` runs it, and
+    `start` plus every `ops:*` script build first, then run the compiled JavaScript on plain Node.js. No
+    `--experimental-strip-types` is needed on the production path anymore.
+  - `src/infrastructure/runtime-support.ts` (new) rejects Node below 22, and any TypeScript-source start without type
+    stripping, from `local-env.ts` and `runWebServer`; Next.js bundles are deliberately not checked.
+  - Guidance strings and their tests moved to the new names (`gmail-oauth.ts`, `gmail-reply-sync.ts`,
+    `discovery-collection-migration.ts`, `test/provider-integrations.test.ts`, `test/discovery-collection-migration.test.ts`).
+    README, `.env.example` (`GRADREACH_REVIEW_REGION`), `docs/private-website-deployment.md`, and the CI workflow (a
+    `npm run build:server` step) were updated to match.
+- **Verification:** `npm run typecheck` exit 0. `npm run build:server` exit 0 with 66 files in `dist/`, zero `.ts` import
+  specifiers in the output, and zero stray `.js` files in the source tree. `node -e "await import('./dist/interfaces/
+  prepare-candidate-review-preview.js')"` loaded a compiled entry on plain Node with no experimental flag.
+  `npm run ops:discovery-pilot` with no region built and then exited 1 with
+  `{"ok":false,"stage":"pilot_configuration","kind":"invalid_request"}`, proving the renamed scripts resolve and fail
+  gracefully. `npm test` 347 tests, 346 passed, 1 opt-in MongoDB test skipped, 0 failed; new `test/runtime-support.test.ts`
+  and the region cases in `test/candidate-review-preview.test.ts`. No provider request, no scheduler start, no MongoDB
+  write, no live Gmail read or send, and no deployment were performed, so the compiled start path is verified locally only.
+- **Carried forward:** a real hosted `npm start` behind the proxy, the Gmail read-scope re-authorization, and the first
+  live `ops:sync-replies` pass all still need the owner.
+

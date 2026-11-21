@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { assertSupportedRuntime } from './runtime-support.ts';
 
 /** Loads simple KEY=value settings from an optional local .env without overriding the process environment. */
 export async function loadLocalEnv(path = '.env'): Promise<void> {
@@ -23,6 +24,7 @@ export async function loadLocalEnv(path = '.env'): Promise<void> {
   }
 }
 
+assertSupportedRuntime();
 await loadLocalEnv();
 
 function isMissingFile(error: unknown): boolean {

@@ -109,7 +109,7 @@ test('Gmail read token refuses a send-only authorization without rewriting the t
     await writeFile(tokenPath, `${JSON.stringify(stored)}\n`, 'utf8');
     await assert.rejects(
       gmailReadOnlyAccessToken({ tokenPath, clientId: 'synthetic-client-id', clientSecret: 'synthetic-client-secret' }),
-      /missing the https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly scope; run npm run gmail:connect again/,
+      /missing the https:\/\/www\.googleapis\.com\/auth\/gmail\.readonly scope; run npm run ops:gmail-connect again/,
     );
     assert.deepEqual(JSON.parse(await readFile(tokenPath, 'utf8')), stored);
   } finally { await rm(folder, { recursive: true, force: true }); }

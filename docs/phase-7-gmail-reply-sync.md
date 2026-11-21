@@ -2,13 +2,13 @@
 
 Audit item: A-05 / R11 — "decide the reply-tracking design before promising it: separate read-only consent, retention policy, untrusted-content handling".
 
-Status: implemented as a manual, read-only local command (`npm run outreach:sync-replies`). No live Gmail read has been executed against the owner mailbox; the evidence below is unit and local-MongoDB verification.
+Status: implemented as a manual, read-only local command (`npm run ops:sync-replies`). No live Gmail read has been executed against the owner mailbox; the evidence below is unit and local-MongoDB verification.
 
 ## Consent
 
 - The OAuth request now asks for `gmail.send` **and** `gmail.readonly` in one consent screen, and `beginGmailAuthorization` refuses a grant that omits either scope.
-- The read scope is a Google restricted scope. The owner enabled it in the Google Cloud Console and must re-run `npm run gmail:connect` once so the stored token carries it; the token file is local, owner-only (Windows ACL / `0600`) and git-ignored.
-- A stored send-only token keeps working for delivery. Reply sync refuses it with `gmail-read-scope-missing` and the message to re-run `npm run gmail:connect`.
+- The read scope is a Google restricted scope. The owner enabled it in the Google Cloud Console and must re-run `npm run ops:gmail-connect` once so the stored token carries it; the token file is local, owner-only (Windows ACL / `0600`) and git-ignored.
+- A stored send-only token keeps working for delivery. Reply sync refuses it with `gmail-read-scope-missing` and the message to re-run `npm run ops:gmail-connect`.
 - No `gmail.modify`, `gmail.labels`, or delete scope is requested. The sync issues GET requests only, so it cannot mark read, label, trash, or delete anything.
 
 ## What is read
