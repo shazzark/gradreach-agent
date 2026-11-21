@@ -23,10 +23,18 @@ test('reviewed official-host allowlist contains only the verified exact universi
   assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Japan.slice(-3), [
     'www.kurims.kyoto-u.ac.jp', 'www.media.kyoto-u.ac.jp', 'global.k.kyoto-u.ac.jp',
   ]);
-  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Russia, ['cs.msu.ru', 'asvk.cs.msu.ru']);
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Russia, ['cs.msu.ru', 'asvk.cs.msu.ru', 'itmo.ru', 'mipt.ru', 'spbu.ru']);
   assert.deepEqual(OFFICIAL_HOSTS_BY_REGION['United Kingdom'], [
     'cst.cam.ac.uk', 'www.cs.ox.ac.uk', 'www.gla.ac.uk', 'warwick.ac.uk', 'www.kcl.ac.uk', 'www.bristol.ac.uk',
   ]);
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Bulgaria, [
+    'tu-sofia.bg', 'www.uni-sofia.bg', 'uni-plovdiv.bg', 'www.uni-ruse.bg', 'www.aubg.edu',
+  ]);
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Liechtenstein, ['www.uni.li']);
+  // Regions without a second accredited university keep their documented single host.
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Luxembourg, ['www.uni.lu']);
+  assert.deepEqual(OFFICIAL_HOSTS_BY_REGION.Malta, ['www.um.edu.mt']);
+  assert.equal(Object.values(OFFICIAL_HOSTS_BY_REGION).reduce((total, hosts) => total + hosts.length, 0), 167);
 
   const seen = new Set<string>();
   for (const [region, hosts] of Object.entries(OFFICIAL_HOSTS_BY_REGION)) {
@@ -49,6 +57,18 @@ test('multi-university regions attribute each exact host to its own institution'
   assert.equal(institutionForOfficialSource('Switzerland', 'https://www.epfl.ch/labs/'), 'École Polytechnique Fédérale de Lausanne');
   assert.equal(institutionForOfficialSource('Italy', 'https://di.unipi.it/en/people/'), 'University of Pisa');
   assert.equal(institutionForOfficialSource('United States', 'https://example.edu/not-reviewed'), 'University of Illinois Urbana-Champaign');
+});
+
+test('2026-11-21 expansion attributes each added host to its own institution', () => {
+  assert.equal(institutionForOfficialSource('Belgium', 'https://www.ugent.be/en/'), 'Ghent University');
+  assert.equal(institutionForOfficialSource('Belgium', 'https://uclouvain.be/fr/facultes/epl'), 'Université catholique de Louvain');
+  assert.equal(institutionForOfficialSource('China', 'https://cs.pku.edu.cn/faculty'), 'Peking University');
+  assert.equal(institutionForOfficialSource('South Korea', 'https://cse.postech.ac.kr/csepostech/index.do'), 'Pohang University of Science and Technology');
+  assert.equal(institutionForOfficialSource('Denmark', 'https://di.ku.dk/english/'), 'University of Copenhagen');
+  assert.equal(institutionForOfficialSource('Spain', 'https://www.upm.es/internacional'), 'Universidad Politécnica de Madrid');
+  assert.equal(institutionForOfficialSource('Ukraine', 'https://kpi.ua/en'), 'Igor Sikorsky Kyiv Polytechnic Institute');
+  // The region's original host still falls back to the region mapping.
+  assert.equal(institutionForOfficialSource('Belgium', 'https://eng.kuleuven.be/en/study'), 'KU Leuven');
 });
 
 test('every reviewed region still composes one searchable Brave site-filter query', () => {

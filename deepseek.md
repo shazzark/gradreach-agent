@@ -687,3 +687,36 @@ npm run typecheck
   proved the local commit's content was already in `origin/main` and nothing was discarded. The branch remains on the remote
   for reference, as with earlier phases. No provider, database, email, or deployment action occurred in this batch.
 
+## Batch 10 - R7 (Global Allowlist Expansion - Phase 2)
+
+- **Why this batch exists:** Batch 6 (2026-11-20) widened ten priority regions. The other 30 configured regions still held
+  only one or two exact hosts each, so `site:` discovery was effectively Western-centric. AUDIT.md A-03/R7 asks for wider
+  per-region evidence, not a bigger single-university list.
+- **Countries expanded (27):** Belgium, China, South Korea, Portugal, Bosnia and Herzegovina, Bulgaria, Croatia, Czechia,
+  Denmark, Estonia, Finland, Greece, Hungary, Iceland, Ireland, Latvia, Lithuania, Moldova, Montenegro, Norway, Poland,
+  Russia, Serbia, Slovakia, Slovenia, Spain, Ukraine.
+- **Number of new hosts added:** 76, taking `OFFICIAL_HOSTS_BY_REGION` from 91 to 167 exact hosts across the same 42
+  regions. `OFFICIAL_INSTITUTION_BY_HOST` grew by the same 76 entries (116 explicit hosts now), so every added host
+  attributes its own institution instead of falling back to the region's original university.
+- **Region shape after the pass:** 20 regions carry four hosts, 9 carry three, 5 carry six, 4 carry five, Japan carries
+  seven, and Liechtenstein, Luxembourg, and Malta stay at one because each country has exactly one accredited university
+  (no second domain exists to add). Iceland, Latvia, Moldova, Slovenia, and Ukraine gained two hosts each; every further
+  candidate there failed a probe.
+- **Verification:** `npm run typecheck` exit 0. `npm test` 348 tests, 347 passed, 1 opt-in MongoDB test skipped, 0 failed.
+  `npm run build` exit 0. Every added host was requested over HTTPS with `curl` on 2026-11-21 before it was written to the
+  allowlist, and the section in `docs/phase-3-allowlist.md` records one row per host with the exact URL, the observed
+  title, and the phrase "Checked 2026-11-21". A check script compared the 76 new hosts against the 76 new doc rows and
+  found no missing or duplicated entry.
+- **Rejections kept:** 23 candidates failed a probe (timeouts, HTTP 403, DNS failure, untrusted TLS, a redirect to plain
+  HTTP, or a redirect chain to a versioned host) and 11 more resolved to an HTTP 200 page but were deliberately left out so a
+  region's single-search site filter stays short. All 34 are listed under the table so the next pass does not re-probe
+  blindly.
+- **Brave 400-character budget:** the longest composed base query after the expansion is Japan at 279 characters (the
+  United States is 237, Germany 226, the United Kingdom 205), so the single-search-per-region filter and the
+  `queryFor` interest truncation still fit. The existing unit test that composes the base query for every region passes,
+  and it now also pins the 167-host total plus Bulgaria, Liechtenstein, Luxembourg, and Malta.
+- **Invariants unchanged:** no dependency was added, hosts remain bare lowercase HTTPS hostnames matched exactly, no parent
+  domain was inferred, and no provider, database, email, or deployment action occurred. Discovery still runs only on
+  countries the private profile configures, and only for regions whose reviewed hosts are recorded here.
+
+
