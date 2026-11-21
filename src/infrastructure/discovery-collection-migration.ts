@@ -28,7 +28,7 @@ export async function assertDiscoveryCollectionsMigrated(db: Db): Promise<void> 
   }
   if (DISCOVERY_COLLECTION_RENAMES.some(({ from }) => names.has(from))) {
     throw new DiscoveryCollectionMigrationError(
-      'Legacy discovery collections must be renamed with npm run db:migrate-discovery before using GradReach storage.',
+      'Legacy discovery collections must be renamed with npm run ops:db-migrate-discovery before using GradReach storage.',
     );
   }
 }

@@ -41,7 +41,7 @@ Do not configure production credentials in Preview or other untrusted environmen
 
 ## Hosting and Atlas network
 
-Connect the repository to a persistent Node.js hosting account, select the production branch and final domain, and use `npm run build` followed by `npm run start` with Node.js 22. The start command launches the custom HTTP/Next.js/Socket.IO server. Configure the proxy to support WebSocket upgrades and preserve the canonical `Host` and HTTPS origin. Set the production environment variables only after the domain is fixed so `AUTH_URL` and the Google redirect URI match it exactly.
+Connect the repository to a persistent Node.js hosting account, select the production branch and final domain, and run `npm ci`, `npm run build`, then `npm start` with Node.js 22 or newer. `npm run build` produces the Next.js website output, and `npm start` runs `npm run build:server` (a `tsc` compile of the server entry points into the ignored `dist/` directory) before launching `node dist/interfaces/web-server.js`. No experimental Node flag is used at start-up, and development dependencies must be installed because that compile runs at start-up. The start command launches the custom HTTP/Next.js/Socket.IO server. Configure the proxy to support WebSocket upgrades and preserve the canonical `Host` and HTTPS origin. Set the production environment variables only after the domain is fixed so `AUTH_URL` and the Google redirect URI match it exactly.
 
 Atlas must accept connections from the deployed server. Choose a host that supports a persistent Node process, WebSocket upgrades, and stable outbound IPs; then add only those exact egress addresses to the Atlas IP access list. Do not use a broad `0.0.0.0/0` rule. No Atlas IP rule has been changed by this work.
 
@@ -49,9 +49,9 @@ Ensure the `gradreach` database already contains the `primary` applicant profile
 
 ## Gmail remains separate
 
-Website Google sign-in requests only identity scopes. It does not connect Gmail, receive Gmail tokens, or enable delivery. The existing local Gmail connection uses its separate Desktop OAuth client, the `gmail.send` and `gmail.readonly` scopes, state/PKCE checks, and the private local token file. Complete `npm run gmail:connect` locally in the owner browser when ready. That existing token file is not automatically deployed or copied to the website, and `npm run outreach:sync-replies` runs only on the owner's machine.
+Website Google sign-in requests only identity scopes. It does not connect Gmail, receive Gmail tokens, or enable delivery. The existing local Gmail connection uses its separate Desktop OAuth client, the `gmail.send` and `gmail.readonly` scopes, state/PKCE checks, and the private local token file. Complete `npm run ops:gmail-connect` locally in the owner browser when ready. That existing token file is not automatically deployed or copied to the website, and `npm run ops:sync-replies` runs only on the owner's machine.
 
-The website can review drafts, record explicit approval, plan queue rows, pause the queue, and display delivery status. It has no direct email-send action. `npm run outreach:scheduler` is a long-running worker, not a Next.js serverless request; do not deploy it as a web function. Any later production sender needs its own approved hosting and secure Gmail-token design. Keep sending disabled until that is deliberately implemented and explicitly authorized. No real email is sent by website sign-in, approval, or queue planning.
+The website can review drafts, record explicit approval, plan queue rows, pause the queue, and display delivery status. It has no direct email-send action. `npm run ops:outreach-scheduler` is a long-running worker, not a Next.js serverless request; do not deploy it as a web function. Any later production sender needs its own approved hosting and secure Gmail-token design. Keep sending disabled until that is deliberately implemented and explicitly authorized. No real email is sent by website sign-in, approval, or queue planning.
 
 ## Owner actions still required
 

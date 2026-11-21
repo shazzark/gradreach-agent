@@ -5,11 +5,13 @@ import next from 'next';
 import { Server } from 'socket.io';
 import type { JobProgressEvent } from '../domain/job-progress.ts';
 import { attachJobProgressSocket } from '../infrastructure/socket-progress-server.ts';
+import { assertSupportedRuntime } from '../infrastructure/runtime-support.ts';
 
 interface ClientEvents {}
 interface ServerEvents { 'job:progress': (event: JobProgressEvent) => void }
 
 export async function runWebServer(): Promise<void> {
+  assertSupportedRuntime();
   const port = Number.parseInt(process.env.PORT ?? '3000', 10);
   const hostname = process.env.HOST ?? '0.0.0.0';
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('PORT must be a valid TCP port');

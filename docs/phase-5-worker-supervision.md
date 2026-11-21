@@ -8,8 +8,8 @@ heartbeat for `outreach:scheduler` and surface it in `outreach-runtime-status.ts
 
 Both schedulers are long-running terminal scripts:
 
-- `npm run outreach:scheduler` → `src/interfaces/outreach-scheduler.ts` (polls every 60 seconds)
-- `npm run discovery:scheduler` → `src/interfaces/discovery-scheduler.ts` (polls every 60 seconds)
+- `npm run ops:outreach-scheduler` → `src/interfaces/outreach-scheduler.ts` (polls every 60 seconds)
+- `npm run ops:discovery-scheduler` → `src/interfaces/discovery-scheduler.ts` (polls every 60 seconds)
 
 If the process crashes, the terminal is closed, or a deployed supervisor never restarts it, the website keeps
 rendering "enabled and unpaused" while nothing is delivered. There was no way to tell a healthy worker from an

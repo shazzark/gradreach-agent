@@ -37,7 +37,7 @@ export class GmailTokenScopeError extends Error {
   readonly requiredScope: string;
 
   constructor(requiredScope: string) {
-    super(`Gmail authorization is missing the ${requiredScope} scope; run npm run gmail:connect again`);
+    super(`Gmail authorization is missing the ${requiredScope} scope; run npm run ops:gmail-connect again`);
     this.name = 'GmailTokenScopeError';
     this.requiredScope = requiredScope;
   }
@@ -196,7 +196,7 @@ async function accessToken(
 
 /**
  * Returns an access token for header-only reply checks. A token authorized before the read-only scope was requested is
- * refused, so the caller can ask the owner to re-run `npm run gmail:connect` instead of receiving an opaque 403.
+ * refused, so the caller can ask the owner to re-run `npm run ops:gmail-connect` instead of receiving an opaque 403.
  */
 export async function gmailReadOnlyAccessToken(options: {
   tokenPath?: string;

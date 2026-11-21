@@ -85,7 +85,7 @@ test('migration resumes safely after only one collection has already been rename
 
 test('application storage guard blocks legacy collections but permits fresh or fully migrated databases', async () => {
   const legacy = memoryDatabase({ professor_candidates: { documents: [], indexes: [] } });
-  await assert.rejects(assertDiscoveryCollectionsMigrated(legacy.db), /db:migrate-discovery/);
+  await assert.rejects(assertDiscoveryCollectionsMigrated(legacy.db), /ops:db-migrate-discovery/);
 
   const migrated = memoryDatabase({ discovery_leads: { documents: [], indexes: [] }, lead_triage_recommendations: { documents: [], indexes: [] } });
   await assert.doesNotReject(assertDiscoveryCollectionsMigrated(migrated.db));
@@ -96,7 +96,7 @@ test('application storage guard blocks legacy collections but permits fresh or f
 
 test('index creation blocks before writing indexes when legacy collections remain', async () => {
   const memory = memoryDatabase({ professor_candidates: { documents: [], indexes: [] } });
-  await assert.rejects(createPhase2Indexes(memory.db), /db:migrate-discovery/);
+  await assert.rejects(createPhase2Indexes(memory.db), /ops:db-migrate-discovery/);
   assert.deepEqual(memory.indexCreations, []);
 });
 
